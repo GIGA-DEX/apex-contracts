@@ -1,0 +1,11 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+optimizer = true
+optimizer_runs = 50
+evm_version = "cancun"
+bytecode_hash = "none"
+remappings = [
+    "@openzeppelin/contracts-3/=lib/openzeppelin-contracts-3/contracts/"
+]

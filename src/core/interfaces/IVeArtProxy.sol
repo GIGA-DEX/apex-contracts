@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+interface IVeArtProxy {
+    function _tokenURI(uint256 _tokenId, uint256 _balanceOf, uint256 _lockedEnd, uint256 _value)
+        external
+        view
+        returns (string memory);
+}
