@@ -17,6 +17,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
       - run: forge fmt --check
       - run: forge build --sizes
       - run: forge test -vvv

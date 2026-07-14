@@ -667,13 +667,13 @@ contract CLPeripheryTest is Test {
         ICLNonfungiblePositionManager(address(nfp))
             .increaseLiquidity(
                 ICLNonfungiblePositionManager.IncreaseLiquidityParams({
-                    tokenId: tokenId,
-                    amount0Desired: 1 ether,
-                    amount1Desired: 1 ether,
-                    amount0Min: 0,
-                    amount1Min: 0,
-                    deadline: block.timestamp
-                })
+                tokenId: tokenId,
+                amount0Desired: 1 ether,
+                amount1Desired: 1 ether,
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp
+            })
             );
         vm.stopPrank();
     }
@@ -689,13 +689,13 @@ contract CLPeripheryTest is Test {
         ICLNonfungiblePositionManager(address(nfp))
             .increaseLiquidity(
                 ICLNonfungiblePositionManager.IncreaseLiquidityParams({
-                    tokenId: tokenId,
-                    amount0Desired: 1 ether,
-                    amount1Desired: 1 ether,
-                    amount0Min: 0,
-                    amount1Min: 0,
-                    deadline: block.timestamp
-                })
+                tokenId: tokenId,
+                amount0Desired: 1 ether,
+                amount1Desired: 1 ether,
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp
+            })
             );
         vm.stopPrank();
 
