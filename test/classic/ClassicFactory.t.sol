@@ -81,8 +81,8 @@ contract ClassicFactoryTest is Test {
         assertTrue(stable.stable());
         string memory symbol0 = IERC20Metadata(volatile.token0()).symbol();
         string memory symbol1 = IERC20Metadata(volatile.token1()).symbol();
-        assertEq(volatile.name(), string.concat("Apex Volatile AMM - ", symbol0, "/", symbol1));
-        assertEq(stable.name(), string.concat("Apex Stable AMM - ", symbol0, "/", symbol1));
+        assertEq(volatile.name(), string.concat("Giga Volatile AMM - ", symbol0, "/", symbol1));
+        assertEq(stable.name(), string.concat("Giga Stable AMM - ", symbol0, "/", symbol1));
         assertEq(volatile.fee(), 3000);
         assertEq(volatile.protocolFee(), 100_000);
         assertEq(volatile.feeReceiver(), feeCenter);

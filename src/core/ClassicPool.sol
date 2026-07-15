@@ -66,11 +66,11 @@ contract ClassicPool is IClassicPool, ERC20, ReentrancyGuard {
         string memory symbol1 = IERC20Metadata(token1_).symbol();
 
         if (stable_) {
-            _apexName = string.concat("Apex Stable AMM - ", symbol0, "/", symbol1);
-            _apexSymbol = string.concat("Apex-sAMM-", symbol0, "/", symbol1);
+            _apexName = string.concat("Giga Stable AMM - ", symbol0, "/", symbol1);
+            _apexSymbol = string.concat("GIGA-sAMM-", symbol0, "/", symbol1);
         } else {
-            _apexName = string.concat("Apex Volatile AMM - ", symbol0, "/", symbol1);
-            _apexSymbol = string.concat("Apex-vAMM-", symbol0, "/", symbol1);
+            _apexName = string.concat("Giga Volatile AMM - ", symbol0, "/", symbol1);
+            _apexSymbol = string.concat("GIGA-vAMM-", symbol0, "/", symbol1);
         }
 
         observations.push(Observation(block.timestamp, 0, 0));

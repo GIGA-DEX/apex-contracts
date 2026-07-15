@@ -10,8 +10,8 @@ contract ApexToken is ERC20 {
 
     constructor(address _recipient, string memory _name, string memory _symbol) ERC20(_name, _symbol) {
         require(_recipient != address(0), ApexErrors.ZERO_ADDRESS());
-        require(bytes(_name).length != 0, "ApexToken name is empty");
-        require(bytes(_symbol).length != 0, "ApexToken symbol is empty");
+        require(bytes(_name).length != 0, "GIGA token name is empty");
+        require(bytes(_symbol).length != 0, "GIGA token symbol is empty");
         _mint(_recipient, INITIAL_SUPPLY);
     }
 }

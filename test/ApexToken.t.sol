@@ -23,10 +23,10 @@ contract ApexTokenTest is Test {
     }
 
     function testApexTokenRejectsEmptyMetadata() public {
-        vm.expectRevert("ApexToken name is empty");
+        vm.expectRevert("GIGA token name is empty");
         new ApexToken(address(0xA9E7), "", "GIGA");
 
-        vm.expectRevert("ApexToken symbol is empty");
+        vm.expectRevert("GIGA token symbol is empty");
         new ApexToken(address(0xA9E7), "Giga", "");
     }
 }

@@ -72,7 +72,7 @@ contract NonfungiblePositionManager is
     address private immutable _tokenDescriptor;
 
     constructor(address _deployer, address _factory, address _WETH9, address _tokenDescriptor_)
-        ERC721Permit("Apex CL Positions NFT", "APEX-CL-POS", "1")
+        ERC721Permit("Giga Positions", "GIGA-POS", "1")
         PeripheryImmutableState(_deployer, _factory, _WETH9)
     {
         _tokenDescriptor = _tokenDescriptor_;

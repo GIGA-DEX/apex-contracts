@@ -242,7 +242,7 @@ contract CLPeripheryTest is Test {
 
         assertEq(
             nfp.tokenURI(tokenId),
-            "data:application/json;utf8,{\"name\":\"Apex CL Position #1\",\"description\":\"Apex concentrated liquidity position NFT. Position activity is available from NonfungiblePositionManager events.\"}"
+            "data:application/json;utf8,{\"name\":\"Giga Position #1\",\"description\":\"Giga concentrated liquidity position NFT. Position activity is available from NonfungiblePositionManager events.\"}"
         );
     }
 

@@ -7,7 +7,7 @@ import "@openzeppelin/contracts-3/utils/Strings.sol";
 import "./interfaces/INonfungiblePositionManager.sol";
 import "./interfaces/INonfungibleTokenPositionDescriptor.sol";
 
-/// @notice Minimal ERC721 metadata for Apex CL position NFTs.
+/// @notice Minimal ERC721 metadata for Giga CL position NFTs.
 /// @dev This intentionally avoids SVG/art generation; position actions are surfaced by NFP events.
 contract SimplePositionDescriptor is INonfungibleTokenPositionDescriptor {
     using Strings for uint256;
@@ -23,9 +23,9 @@ contract SimplePositionDescriptor is INonfungibleTokenPositionDescriptor {
         return string(
             abi.encodePacked(
                 "data:application/json;utf8,",
-                '{"name":"Apex CL Position #',
+                '{"name":"Giga Position #',
                 tokenId.toString(),
-                '","description":"Apex concentrated liquidity position NFT. Position activity is available from ',
+                '","description":"Giga concentrated liquidity position NFT. Position activity is available from ',
                 'NonfungiblePositionManager events."}'
             )
         );
