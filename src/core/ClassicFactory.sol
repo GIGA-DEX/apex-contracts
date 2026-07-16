@@ -13,7 +13,7 @@ contract ClassicFactory is IClassicFactory {
 
     uint256 public constant MAX_FEE = 500_000;
     uint256 public constant FEE_DENOM = 1_000_000;
-    uint256 public constant DEFAULT_PROTOCOL_FEE = FEE_DENOM / 10;
+    uint256 public constant DEFAULT_PROTOCOL_FEE = FEE_DENOM / 5;
 
     address public feeReceiver;
     uint256 public fee;

@@ -12,7 +12,6 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IApexController} from "./interfaces/IApexController.sol";
 import {IClassicChef} from "./interfaces/IClassicChef.sol";
 import {IClassicFactory} from "./interfaces/IClassicFactory.sol";
-import {IClassicPool} from "./interfaces/IClassicPool.sol";
 import {ICLFactory} from "./interfaces/ICLFactory.sol";
 import {ICLMasterChef} from "./interfaces/ICLMasterChef.sol";
 import {ICLMasterChefConfig} from "./interfaces/ICLMasterChefConfig.sol";
@@ -20,6 +19,7 @@ import {ICLPool} from "./interfaces/ICLPool.sol";
 import {IFeeCenter} from "./interfaces/IFeeCenter.sol";
 import {IApexVault} from "./interfaces/IApexVault.sol";
 import {ApexErrors} from "./libraries/common/ApexErrors.sol";
+import {ApexControllerFeePolicy} from "./libraries/ApexControllerFeePolicy.sol";
 import {ApexControllerStorage} from "./storage/ApexControllerStorage.sol";
 
 interface IEmissionCenter {
@@ -31,9 +31,8 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
     using SafeERC20 for IERC20;
 
     uint256 public constant REWARD_PRECISION = 1e12;
-    uint256 private constant CLASSIC_DEFAULT_PROTOCOL_FEE = 100_000; // 10% go to stakers
+    uint256 private constant CLASSIC_DEFAULT_PROTOCOL_FEE = 200_000; // 20% protocol share when ungauged
     uint256 private constant CLASSIC_FARM_PROTOCOL_FEE = 1_000_000; // 100% go to stakers
-    uint32 private constant CL_DEFAULT_PROTOCOL_FEE = 1_000; // 10% go to stakers
     uint32 private constant CL_FARM_PROTOCOL_FEE = 10_000; // 100% go to stakers
 
     bytes32 public constant FEE_OPERATOR = keccak256("FEE_OPERATOR");
@@ -145,33 +144,42 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
 
     // classic
     function setClassicGlobalFee(uint256 _fee) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        ApexControllerStorage.layout().classicFactory.setFee(_fee);
+        ApexControllerFeePolicy.setClassicGlobalFee(_fee);
     }
 
     function setClassicGlobalProtocolFee(uint256 _protocolFee) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        ApexControllerStorage.layout().classicFactory.setProtocolFee(_protocolFee);
+        ApexControllerFeePolicy.setClassicGlobalProtocolFee(_protocolFee);
+    }
+
+    function setCLGlobalProtocolFee(uint32 _protocolFee) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        ApexControllerFeePolicy.setCLGlobalProtocolFee(_protocolFee);
+    }
+
+    function clGlobalProtocolFee() public view returns (uint32) {
+        return ApexControllerFeePolicy.clGlobalProtocolFee();
+    }
+
+    function applyUngaugedProtocolFees(address[] calldata _classicPairs, address[] calldata _clPools)
+        external
+        onlyRole(FEE_OPERATOR)
+    {
+        ApexControllerFeePolicy.applyUngaugedProtocolFees(_classicPairs, _clPools);
     }
 
     function setClassicGlobalFeeReceiver(address _feeReceiver) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        ApexControllerStorage.layout().classicFactory.setFeeReceiver(_feeReceiver);
+        ApexControllerFeePolicy.setClassicGlobalFeeReceiver(_feeReceiver);
     }
 
     function overrideClassicFeeReceiver(address _pair, address _feeReceiver) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        IClassicFactory factory = ApexControllerStorage.layout().classicFactory;
-        require(factory.isPair(_pair), ApexErrors.NOT_PAIR(_pair));
-        factory.setPairFeeReceiver(_pair, _feeReceiver);
+        ApexControllerFeePolicy.overrideClassicFeeReceiver(_pair, _feeReceiver);
     }
 
     function overrideClassicFee(address _pair, uint256 _fee) external onlyRole(FEE_OPERATOR) {
-        IClassicFactory factory = ApexControllerStorage.layout().classicFactory;
-        require(factory.isPair(_pair), ApexErrors.NOT_PAIR(_pair));
-        factory.setPairFee(_pair, _fee);
+        ApexControllerFeePolicy.overrideClassicFee(_pair, _fee);
     }
 
     function overrideClassicProtocolFee(address _pair, uint256 _protocolFee) external onlyRole(FEE_OPERATOR) {
-        IClassicFactory factory = ApexControllerStorage.layout().classicFactory;
-        require(factory.isPair(_pair), ApexErrors.NOT_PAIR(_pair));
-        factory.setPairProtocolFee(_pair, _protocolFee);
+        ApexControllerFeePolicy.overrideClassicProtocolFee(_pair, _protocolFee);
     }
 
     // cl
@@ -179,7 +187,7 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         external
         onlyRole(FEE_OPERATOR)
     {
-        _canonicalCLFactory(_pool).setFeeProtocol(_pool, _feeProtocol0, _feeProtocol1);
+        ApexControllerFeePolicy.overrideCLProtocolFee(_pool, _feeProtocol0, _feeProtocol1);
     }
 
     function collectCLProtocolFees(address _pool, uint128 _amount0Requested, uint128 _amount1Requested)
@@ -187,9 +195,7 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         onlyRole(FEE_OPERATOR)
         returns (uint128 amount0, uint128 amount1)
     {
-        address recipient = address(ApexControllerStorage.layout().feeCenter);
-        require(recipient != address(0), ApexErrors.ZERO_ADDRESS());
-        return _canonicalCLFactory(_pool).collectProtocol(_pool, recipient, _amount0Requested, _amount1Requested);
+        return ApexControllerFeePolicy.collectCLProtocolFees(_pool, _amount0Requested, _amount1Requested);
     }
 
     function collectClassicProtocolFees(address _pair)
@@ -197,11 +203,7 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         onlyRole(FEE_OPERATOR)
         returns (uint256 amount0, uint256 amount1)
     {
-        ApexControllerStorage.Layout storage $ = ApexControllerStorage.layout();
-        require($.classicFactory.isPair(_pair), ApexErrors.NOT_PAIR(_pair));
-
-        IClassicPool(_pair).mintFee();
-        return $.feeCenter.realizeClassicFees(_pair);
+        return ApexControllerFeePolicy.collectClassicProtocolFees(_pair);
     }
 
     // farms
@@ -263,7 +265,7 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         classicChef.setPoolAllocPoint(_pair, 0);
         $.totalAllocPoint -= $.farmAllocPoint[_pair];
         $.farmAllocPoint[_pair] = 0;
-        factory.setPairProtocolFee(_pair, CLASSIC_DEFAULT_PROTOCOL_FEE);
+        factory.setPairProtocolFee(_pair, factory.protocolFee());
         factory.setPairFeeReceiver(_pair, factory.feeReceiver());
         $.activeFarm[_pair] = false;
 
@@ -332,28 +334,27 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         clMasterChef.setPoolAllocPoint(_pool, 0);
         $.totalAllocPoint -= $.farmAllocPoint[_pool];
         $.farmAllocPoint[_pool] = 0;
-        factory.setFeeProtocol(_pool, CL_DEFAULT_PROTOCOL_FEE, CL_DEFAULT_PROTOCOL_FEE);
+        uint32 protocolFee = clGlobalProtocolFee();
+        factory.setFeeProtocol(_pool, protocolFee, protocolFee);
         $.activeFarm[_pool] = false;
 
         emit CLFarmDeactivated(address(factory), _pool);
     }
 
     function setLmPoolDeployer(address _lmPoolDeployer) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        ApexControllerStorage.layout().clMasterChef.setLMPoolDeployer(_lmPoolDeployer);
+        ApexControllerFeePolicy.setLmPoolDeployer(_lmPoolDeployer);
     }
 
     function setCLMasterChefEmergency(bool _emergency) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        ApexControllerStorage.layout().clMasterChef.setEmergency(_emergency);
+        ApexControllerFeePolicy.setCLMasterChefEmergency(_emergency);
     }
 
     function setCLMevResistanceWindow(uint32 _window) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        ApexControllerStorage.layout().clMasterChef.setMevResistanceWindow(_window);
+        ApexControllerFeePolicy.setCLMevResistanceWindow(_window);
     }
 
     function setEmissionCenter(address _center) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (_center != address(0)) require(_center.code.length != 0, ApexErrors.ZERO_ADDRESS());
-        ApexControllerStorage.layout().emissionCenter = _center;
-        emit EmissionCenterSet(_center);
+        ApexControllerFeePolicy.setEmissionCenter(_center);
     }
 
     function stopAllEmissions() external onlyRole(EMISSION_OPERATOR) {

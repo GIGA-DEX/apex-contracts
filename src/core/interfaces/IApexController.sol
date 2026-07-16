@@ -40,6 +40,12 @@ interface IApexController {
 
     function deactivateCLFarm(address pool) external;
 
+    function setCLGlobalProtocolFee(uint32 protocolFee) external;
+
+    function clGlobalProtocolFee() external view returns (uint32);
+
+    function applyUngaugedProtocolFees(address[] calldata classicPairs, address[] calldata clPools) external;
+
     function setLmPoolDeployer(address lmPoolDeployer) external;
 
     function setCLMasterChefEmergency(bool emergency) external;

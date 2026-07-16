@@ -84,7 +84,7 @@ contract ClassicFactoryTest is Test {
         assertEq(volatile.name(), string.concat("Giga Volatile AMM - ", symbol0, "/", symbol1));
         assertEq(stable.name(), string.concat("Giga Stable AMM - ", symbol0, "/", symbol1));
         assertEq(volatile.fee(), 3000);
-        assertEq(volatile.protocolFee(), 100_000);
+        assertEq(volatile.protocolFee(), 200_000);
         assertEq(volatile.feeReceiver(), feeCenter);
         assertEq(factory.pairFee(volatilePair), 3000);
     }

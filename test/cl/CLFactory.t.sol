@@ -153,7 +153,7 @@ contract CLFactoryTest is Test {
         assertEq(feeProtocol >> 16, 10_000);
     }
 
-    function testCLPoolInitializesWithTenPercentProtocolFee() public {
+    function testCLPoolInitializationFallbackRemainsTenPercent() public {
         address pool = factory.createPool(tokenA, tokenB, 3000);
         ICLPoolHarness(pool).initialize(SQRT_PRICE_1_1);
 

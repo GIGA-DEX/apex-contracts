@@ -8,6 +8,7 @@ library ApexErrors {
     error INVALID_DURATION();
     error INVALID_POOL(address pool);
     error FARM_INACTIVE(address pool);
+    error FARM_ACTIVE(address pool);
     error LENGTH_MISMATCH();
     error PAIR_EXISTS();
     error POOL_EXISTS(address pool);

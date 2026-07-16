@@ -310,6 +310,95 @@ contract ApexControllerEmissionsTest is Test {
         classicPair = classicFactory.createPair(address(tokenA), address(tokenB), false);
     }
 
+    function testUngaugedProtocolFeeDefaultsAreTwentyPercent() public view {
+        assertEq(controller.clGlobalProtocolFee(), 2_000);
+        assertEq(classicFactory.protocolFee(), 200_000);
+        assertEq(ClassicPool(classicPair).protocolFee(), 200_000);
+    }
+
+    function testAdminCanConfigureUngaugedProtocolFeePolicy() public {
+        controller.setClassicGlobalProtocolFee(250_000);
+        controller.setCLGlobalProtocolFee(3_000);
+
+        assertEq(controller.clGlobalProtocolFee(), 3_000);
+        assertEq(classicFactory.protocolFee(), 250_000);
+
+        controller.setClassicGlobalProtocolFee(0);
+        controller.setCLGlobalProtocolFee(0);
+        assertEq(classicFactory.protocolFee(), 0);
+        assertEq(controller.clGlobalProtocolFee(), 0);
+    }
+
+    function testUngaugedProtocolFeePolicyRejectsInvalidValuesAndUnauthorizedCallers() public {
+        vm.expectRevert(ApexErrors.INVALID_PROTOCOL_FEE.selector);
+        controller.setClassicGlobalProtocolFee(1_000_001);
+
+        vm.expectRevert(ApexErrors.INVALID_PROTOCOL_FEE.selector);
+        controller.setCLGlobalProtocolFee(10_001);
+
+        vm.startPrank(alice);
+        vm.expectRevert();
+        controller.setClassicGlobalProtocolFee(200_000);
+        vm.expectRevert();
+        controller.setCLGlobalProtocolFee(2_000);
+        address[] memory classicPairs = new address[](1);
+        classicPairs[0] = classicPair;
+        address[] memory clPools = new address[](1);
+        clPools[0] = address(clPool);
+        vm.expectRevert();
+        controller.applyUngaugedProtocolFees(classicPairs, clPools);
+        vm.stopPrank();
+    }
+
+    function testFeeOperatorCanBatchApplyUngaugedProtocolFeePolicy() public {
+        controller.setClassicGlobalProtocolFee(250_000);
+        controller.setCLGlobalProtocolFee(3_000);
+        controller.overrideClassicProtocolFee(classicPair, 123_456);
+        controller.overrideCLProtocolFee(address(clPool), 4_000, 5_000);
+
+        address[] memory classicPairs = new address[](1);
+        classicPairs[0] = classicPair;
+        address[] memory clPools = new address[](1);
+        clPools[0] = address(clPool);
+        controller.applyUngaugedProtocolFees(classicPairs, clPools);
+
+        assertEq(ClassicPool(classicPair).protocolFee(), 250_000);
+        (uint32 feeProtocol0, uint32 feeProtocol1) = clFactory.feeProtocols(address(clPool));
+        assertEq(feeProtocol0, 3_000);
+        assertEq(feeProtocol1, 3_000);
+    }
+
+    function testUngaugedProtocolFeeApplicationRejectsActiveFarms() public {
+        address[] memory classicPairs = new address[](1);
+        classicPairs[0] = classicPair;
+        address[] memory noCLPools = new address[](0);
+        controller.activateClassicFarm(classicPair, 0);
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.FARM_ACTIVE.selector, classicPair));
+        controller.applyUngaugedProtocolFees(classicPairs, noCLPools);
+
+        address[] memory noClassicPairs = new address[](0);
+        address[] memory clPools = new address[](1);
+        clPools[0] = address(clPool);
+        controller.activateCLFarm(address(clPool), 0);
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.FARM_ACTIVE.selector, address(clPool)));
+        controller.applyUngaugedProtocolFees(noClassicPairs, clPools);
+    }
+
+    function testFarmDeactivationRestoresConfiguredUngaugedProtocolFeePolicy() public {
+        controller.setClassicGlobalProtocolFee(250_000);
+        controller.setCLGlobalProtocolFee(3_000);
+
+        controller.activateClassicFarm(classicPair, 0);
+        controller.activateCLFarm(address(clPool), 0);
+        controller.deactivateClassicFarm(classicPair);
+        controller.deactivateCLFarm(address(clPool));
+
+        assertEq(ClassicPool(classicPair).protocolFee(), 250_000);
+        (uint32 feeProtocol0, uint32 feeProtocol1) = clFactory.feeProtocols(address(clPool));
+        assertEq(feeProtocol0, 3_000);
+        assertEq(feeProtocol1, 3_000);
+    }
+
     function testInitializeProtocolRejectsWrongCLFactoryOwner() public {
         ApexController freshController = _deployControllerProxy(address(this));
         ApexMockCLFeeFactory wrongCLFactory = new ApexMockCLFeeFactory();
@@ -1821,7 +1910,7 @@ contract ApexControllerEmissionsTest is Test {
 
         (, uint256 allocPoint,,,) = classicChef.poolInfo(classicChef.pidOf(classicPair));
         assertEq(allocPoint, 0);
-        assertEq(ClassicPool(classicPair).protocolFee(), 100_000);
+        assertEq(ClassicPool(classicPair).protocolFee(), 200_000);
         assertEq(ClassicPool(classicPair).feeReceiver(), classicFactory.feeReceiver());
         assertFalse(controller.isFarmActive(classicPair));
 
@@ -1864,7 +1953,7 @@ contract ApexControllerEmissionsTest is Test {
         assertEq(ClassicPool(classicPair).feeReceiver(), address(feeCenter));
 
         controller.deactivateClassicFarm(classicPair);
-        assertEq(ClassicPool(classicPair).protocolFee(), 100_000);
+        assertEq(ClassicPool(classicPair).protocolFee(), 200_000);
         assertEq(ClassicPool(classicPair).feeReceiver(), classicFactory.feeReceiver());
     }
 
@@ -1912,8 +2001,8 @@ contract ApexControllerEmissionsTest is Test {
         (uint32 feeProtocol0, uint32 feeProtocol1) = clFactory.feeProtocols(address(clPool));
         (uint256 allocPoint,,,,,) = clChef.poolInfo(clChef.v3PoolAddressPid(address(clPool)));
         assertEq(allocPoint, 0);
-        assertEq(feeProtocol0, 1000);
-        assertEq(feeProtocol1, 1000);
+        assertEq(feeProtocol0, 2000);
+        assertEq(feeProtocol1, 2000);
         assertEq(clPool.lmPool(), lmPool);
         assertFalse(controller.isFarmActive(address(clPool)));
     }
@@ -1953,8 +2042,8 @@ contract ApexControllerEmissionsTest is Test {
 
         controller.deactivateCLFarm(address(clPool));
         (feeProtocol0, feeProtocol1) = clFactory.feeProtocols(address(clPool));
-        assertEq(feeProtocol0, 1000);
-        assertEq(feeProtocol1, 1000);
+        assertEq(feeProtocol0, 2000);
+        assertEq(feeProtocol1, 2000);
     }
 
     function testCLFarmCanReactivateAfterExpiredWindowAndEarnAgain() public {

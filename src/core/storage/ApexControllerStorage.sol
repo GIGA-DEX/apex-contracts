@@ -36,6 +36,7 @@ library ApexControllerStorage {
         EnumerableSet.AddressSet clFarms;
         IFeeCenter feeCenter;
         address emissionCenter;
+        uint32 clGlobalProtocolFeePlusOne;
     }
 
     function layout() internal pure returns (Layout storage s) {
