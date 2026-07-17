@@ -2,6 +2,8 @@
 pragma solidity ^0.8.20;
 
 interface IApexController {
+    event TreasurySet(address indexed previousTreasury, address indexed newTreasury);
+
     struct InitParams {
         address admin;
         address treasury;
@@ -123,6 +125,8 @@ interface IApexController {
     function registeredClassicFarmAt(uint256 index) external view returns (address);
 
     function registeredCLFarmAt(uint256 index) external view returns (address);
+
+    function setTreasury(address treasury) external;
 
     function treasury() external view returns (address);
 

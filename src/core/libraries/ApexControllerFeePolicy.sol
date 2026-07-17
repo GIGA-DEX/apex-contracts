@@ -14,6 +14,15 @@ library ApexControllerFeePolicy {
 
     event CLGlobalProtocolFeeSet(uint32 protocolFee);
     event EmissionCenterSet(address indexed center);
+    event TreasurySet(address indexed previousTreasury, address indexed newTreasury);
+
+    function setTreasury(address treasury) external {
+        require(treasury != address(0), ApexErrors.ZERO_ADDRESS());
+        ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
+        address previousTreasury = s.treasury;
+        s.treasury = treasury;
+        emit TreasurySet(previousTreasury, treasury);
+    }
 
     function setCLGlobalProtocolFee(uint32 protocolFee) external {
         require(protocolFee <= CL_PROTOCOL_FEE_DENOMINATOR, ApexErrors.INVALID_PROTOCOL_FEE());

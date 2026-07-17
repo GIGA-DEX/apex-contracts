@@ -65,8 +65,7 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
     }
 
     function initialize(InitParams calldata _params) external initializer {
-        require(_params.admin != address(0), ApexErrors.ZERO_ADDRESS());
-        require(_params.treasury != address(0), ApexErrors.ZERO_ADDRESS());
+        require(_params.admin != address(0) && _params.treasury != address(0), ApexErrors.ZERO_ADDRESS());
         __AccessControlEnumerable_init();
         __ReentrancyGuard_init();
 
@@ -654,6 +653,10 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
         ApexControllerStorage.layout().feeCenter.rescueReceiverToken(_receiver, _token, _to, _amount);
+    }
+
+    function setTreasury(address _treasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        ApexControllerFeePolicy.setTreasury(_treasury);
     }
 
     // addresses

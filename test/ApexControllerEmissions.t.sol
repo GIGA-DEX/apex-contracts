@@ -2358,6 +2358,38 @@ contract ApexControllerEmissionsTest is Test {
         assertFalse(controller.hasRole(feeOperator, alice));
     }
 
+    function testDefaultAdminCanRotateTreasuryAndVaultSweepsUseNewTreasury() public {
+        controller.setTreasury(bob);
+        assertEq(controller.treasury(), bob);
+
+        veNFT.mint(alice, 1, 100 ether);
+        vm.startPrank(alice);
+        veNFT.approve(address(vault), 1);
+        vault.stake(1, _singleUserConfig(address(feeToken)));
+        vm.stopPrank();
+
+        _notifyVaultReward(70 ether);
+        vm.warp(block.timestamp + 1 days);
+        vm.prank(alice);
+        vault.unstake(1);
+        vm.warp(block.timestamp + 3 days);
+
+        assertApproxEqAbs(controller.sweepVaultUnallocated(address(feeToken)), 30 ether, 1e15);
+        assertApproxEqAbs(feeToken.balanceOf(bob), 30 ether, 1e15);
+        assertEq(feeToken.balanceOf(treasury), 0);
+    }
+
+    function testTreasuryRotationRequiresDefaultAdminAndRejectsZeroAddress() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        controller.setTreasury(bob);
+
+        vm.expectRevert(ApexErrors.ZERO_ADDRESS.selector);
+        controller.setTreasury(address(0));
+
+        assertEq(controller.treasury(), treasury);
+    }
+
     function testApexControllerProxyAdminOwnerCanUpgrade() public {
         ApexController implementation = new ApexController();
         ProxyAdmin proxyAdmin = ProxyAdmin(_proxyAdmin(address(controller)));
