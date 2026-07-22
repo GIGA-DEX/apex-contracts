@@ -1,35 +1,23 @@
-# Apex Contracts — Security Review Scope
+# Apex Contracts — Audit Scope
 
-## Scope Identification
+## Scope Baseline
 
 | Item | Value |
 | --- | --- |
-| Audit repository | `https://github.com/GIGA-DEX/apex-contracts` |
-| Source directory | `src/` |
+| Repository | `https://github.com/GIGA-DEX/apex-contracts` |
 | Source tree | `d25ecc1858df782b9a6dfcbcbe96511279bf83a0` |
-| In-scope files | 29 |
-| In-scope Solidity code lines | 5,734 |
+| Full-review scope | 16 files / 2,376 Solidity code lines |
+| Fork-delta scope | 13 files; Apex semantic deltas only |
 
-The source tree is the Git object ID of `src/` and identifies the contract source
-independently of documentation-only commits. Code-line counts use `cloc 2.06`
-and exclude blank and comment lines.
+The commercial review baseline is **2,376 full-review LoC plus the Apex semantic
+deltas identified below**. The complete size of a fork-derived file is not part
+of the full-review LoC merely because that file contains an Apex change.
 
-## Review Classification
+Comments, formatting, import paths, compiler pragmas, contract/interface
+renames, equivalent casts, and other non-semantic adaptations are excluded from
+the fork-delta scope.
 
-| Classification | Files | Container LoC | Review treatment |
-| --- | ---: | ---: | --- |
-| Full review | 17 | 2,979 | Review the complete Apex implementation |
-| Differential review — close fork | 7 | 1,248 | Review Apex deltas and affected invariants against the pinned upstream file |
-| Differential review — material fork | 5 | 1,507 | Review all Apex changes and affected integration/accounting paths; unchanged upstream mechanics remain reference code |
-| **Total** | **29** | **5,734** |  |
-
-For differential files, container LoC is the size of the complete Apex file and
-does not represent the size of the Apex delta. Unchanged upstream logic is not a
-new line-by-line review target. Changes to imports, compiler pragmas, contract or
-interface names, formatting, and equivalent casts do not enter scope unless they
-alter runtime behavior.
-
-## Full Review
+## Full-Review Files
 
 | File | Code LoC |
 | --- | ---: |
@@ -39,7 +27,6 @@ alter runtime behavior.
 | `src/core/EmissionCenter.sol` | 25 |
 | `src/core/FeeCenter.sol` | 193 |
 | `src/core/FeeReceiver.sol` | 93 |
-| `src/core/VeApexToken.sol` | 603 |
 | `src/core/libraries/ApexControllerFeePolicy.sol` | 122 |
 | `src/core/storage/ApexControllerStorage.sol` | 42 |
 | `src/core/storage/ApexVaultStorage.sol` | 48 |
@@ -50,76 +37,40 @@ alter runtime behavior.
 | `src/periphery/SimplePositionDescriptor.sol` | 25 |
 | `src/periphery/SmartRouter.sol` | 266 |
 | `src/periphery/libraries/MixedRoute.sol` | 19 |
-| **Total** | **2,979** |
+| **Total** | **2,376** |
 
-`VeApexToken.sol` retains veAERO checkpoint ancestry, but the upgradeable storage
-conversion and removed/changed lock features are broad enough to require a full
-review. The pinned veAERO implementation remains reference material for retained
-checkpoint mechanics.
+## Fork-Delta Files
 
-## Differential Review — Close Forks
+Only the runtime-relevant Apex deltas and the invariants directly affected by
+those deltas are in scope. Unchanged upstream implementation is reference code.
 
-Pinned PancakeSwap V3 source:
-`pancakeswap/pancake-v3-contracts@986847948755cba528324d41be19480731c36c2a`.
-
-| Apex file | Code LoC | Upstream file | Apex delta boundary |
-| --- | ---: | --- | --- |
-| `src/core/CLFactory.sol` | 133 | `projects/v3-core/contracts/PancakeV3Factory.sol` | Fee tiers, ownership/binding, pool validation, and LM-pool configuration |
-| `src/core/CLPool.sol` | 601 | `projects/v3-core/contracts/PancakeV3Pool.sol` | Protocol-fee representation, range/default behavior, and Apex integration changes |
-| `src/core/CLPoolDeployer.sol` | 40 | `projects/v3-core/contracts/PancakeV3PoolDeployer.sol` | Guarded one-time factory binding and Apex deployment wiring |
-| `src/core/LmPool.sol` | 102 | `projects/v3-lm-pool/contracts/PancakeV3LmPool.sol` | Finite controller reward periods and zero-liquidity reward treatment |
-| `src/core/LmPoolDeployer.sol` | 29 | `projects/v3-lm-pool/contracts/PancakeV3LmPoolDeployer.sol` | Factory discovery and Apex Chef/pool wiring |
-| `src/periphery/NonfungiblePositionManager.sol` | 313 | `projects/v3-periphery/contracts/NonfungiblePositionManager.sol` | `mintAndStake`, recipient/Chef validation, and liquidity-donation restrictions |
-| `src/periphery/libraries/PoolAddress.sol` | 30 | `projects/v3-periphery/contracts/libraries/PoolAddress.sol` | Apex pool types and init-code hash |
-| **Total container LoC** | **1,248** |  |  |
-
-The concentrated-liquidity swap engine, tick processing, oracle observations,
-position accounting, and inherited periphery mechanics remain PancakeSwap logic
-except where an Apex delta above changes their inputs, outputs, or invariants.
-
-## Differential Review — Material Forks
-
-These files retain identifiable upstream structure, but Apex modifications are
-larger than the close-fork group. The scope is every Apex delta, the complete
-enclosing function, and each invariant or integration path affected by that
-delta. Unchanged upstream routines remain outside the new implementation review.
-
-| Apex file | Code LoC | Pinned upstream file | Apex delta boundary |
-| --- | ---: | --- | --- |
-| `src/core/CLMasterChef.sol` | 501 | PancakeSwap `projects/masterchef-v3/contracts/MasterChefV3.sol` | Controller-funded finite emissions, boost removal, NFT custody, liquidity-change timing, MEV treatment, and withdrawal behavior |
-| `src/core/ClassicChef.sol` | 201 | Trader Joe `contracts/MasterChefJoeV2.sol` | Controller-funded finite emissions, accounting precision, liability release, pool-supply tracking, and router callbacks |
-| `src/core/ClassicFactory.sol` | 100 | Ramses `contracts/factories/PairFactory.sol` | Apex authority, fee configuration, receiver configuration, and pair deployment |
-| `src/core/ClassicPool.sol` | 384 | Ramses `contracts/Pair.sol` | ERC-20 integration, lazy protocol-fee minting, fee receiver/configuration, and Apex factory/controller integration |
-| `src/periphery/ClassicRouter.sol` | 321 | Ramses `contracts/Router.sol` | Apex interfaces, atomic add-and-stake, withdrawal callbacks, recipient handling, and native-token flows |
-| **Total container LoC** | **1,507** |  |  |
-
-Pinned revisions for this group:
-
-- PancakeSwap V3:
-  `pancakeswap/pancake-v3-contracts@986847948755cba528324d41be19480731c36c2a`
-- Trader Joe:
-  `traderjoe-xyz/joe-core@5bec2f3d86500bfd81038c99afe702ee7e67af3e`
-- Ramses V3:
-  `RamsesExchange/ramses-v3-contracts@72977b9125051ac88d0dc1d08706d6230fc3c39d`
-
-For `ClassicPool.sol`, Ramses-derived stable/volatile curve math, reserve
-accounting, oracle observation logic, and swap mechanics are reference code.
-The Apex fee-minting and integration deltas, including their effect on those
-inherited invariants, are in scope.
-
-## Upstream Reference for Full-Review Fork
-
-| Apex file | Reference source | Pinned revision |
+| Apex file | Pinned upstream file | Delta in scope |
 | --- | --- | --- |
-| `src/core/VeApexToken.sol` | Aerodrome `contracts/VotingEscrow.sol` | `aerodrome-finance/contracts@1ba30815bba620f7e9faa34769ffd00c214c9b82` |
+| `src/core/ClassicPool.sol` | Ramses `contracts/Pair.sol` | LP metadata, renamed fee API, compiler/dependency and CREATE2 integration. **No change to curve math, swaps, mint/burn, lazy fee-mint math, reserves, or TWAP logic.** |
+| `src/core/ClassicFactory.sol` | Ramses `contracts/factories/PairFactory.sol` | `ApexController` authority, fee receiver and protocol-fee configuration, pair validation, and deployment integration |
+| `src/periphery/ClassicRouter.sol` | Ramses `contracts/Router.sol` | Chef integration, parameterized liquidity entrypoints, staking, authenticated withdrawal callbacks, and native-token handling. Unchanged liquidity-ratio arithmetic is reference code |
+| `src/core/ClassicChef.sol` | Trader Joe `contracts/MasterChefJoeV2.sol` | Controller-funded finite rewards, accounting precision, pool-supply tracking, liability release, and router callbacks |
+| `src/core/CLPool.sol` | PancakeSwap `projects/v3-core/contracts/PancakeV3Pool.sol` | Protocol-fee defaults, packing and accepted range, plus Apex interface integration. **No change to swap, tick, oracle, position, or liquidity math.** |
+| `src/core/CLFactory.sol` | PancakeSwap `projects/v3-core/contracts/PancakeV3Factory.sol` | Initial owner, enabled fee tiers, canonical-pool validation, and Apex deployer/LM integration |
+| `src/core/CLPoolDeployer.sol` | PancakeSwap `projects/v3-core/contracts/PancakeV3PoolDeployer.sol` | Guarded one-time factory binding |
+| `src/core/CLMasterChef.sol` | PancakeSwap `projects/masterchef-v3/contracts/MasterChefV3.sol` | Controller-funded finite rewards, boost removal, NFT custody, liquidity-change timing, MEV treatment, and withdrawal behavior |
+| `src/core/LmPool.sol` | PancakeSwap `projects/v3-lm-pool/contracts/PancakeV3LmPool.sol` | Finite reward-window handling and zero-liquidity reward forfeiture |
+| `src/core/LmPoolDeployer.sol` | PancakeSwap `projects/v3-lm-pool/contracts/PancakeV3LmPoolDeployer.sol` | Factory discovery and Apex Chef/pool wiring |
+| `src/periphery/NonfungiblePositionManager.sol` | PancakeSwap `projects/v3-periphery/contracts/NonfungiblePositionManager.sol` | `mintAndStake`, staking-recipient validation, internal mint refactor, and authorization of liquidity increases |
+| `src/periphery/libraries/PoolAddress.sol` | PancakeSwap `projects/v3-periphery/contracts/libraries/PoolAddress.sol` | Apex pool init-code hash and address cast |
+| `src/core/VeApexToken.sol` | Aerodrome `contracts/VotingEscrow.sol` | Upgradeable/namespaced storage conversion and removed or changed lock features. Retained veAERO checkpoint mathematics is reference code |
 
-This reference does not change the full-review classification of
-`VeApexToken.sol`.
+Pinned upstream revisions:
 
-## Internal Dependencies — Out of Scope
+- Ramses V3: `RamsesExchange/ramses-v3-contracts@72977b9125051ac88d0dc1d08706d6230fc3c39d`
+- PancakeSwap V3: `pancakeswap/pancake-v3-contracts@986847948755cba528324d41be19480731c36c2a`
+- Trader Joe: `traderjoe-xyz/joe-core@5bec2f3d86500bfd81038c99afe702ee7e67af3e`
+- Aerodrome: `aerodrome-finance/contracts@1ba30815bba620f7e9faa34769ffd00c214c9b82`
 
-The following files are available as compilation and analysis context but are
-excluded from the implementation scope:
+## Excluded Inherited Source
+
+The following source is available for compilation and integration context but is
+excluded from line-by-line review:
 
 ```text
 src/core/CLEnumerable.sol
@@ -143,32 +94,20 @@ src/periphery/libraries/MixedRoute.sol
 src/periphery/libraries/PoolAddress.sol
 ```
 
-Exclusion basis:
+The excluded CL math, pool-support libraries, periphery bases, `SwapRouter`,
+quoters, lens, and multicall preserve their pinned PancakeSwap or Ramses/Uniswap
+behavior. Interfaces and `ApexErrors.sol` contain declarations rather than
+executable protocol logic.
 
-- `src/core/libraries/cl/**` preserves PancakeSwap CL math and accounting logic
-  with import, compiler, naming, formatting, or semantically equivalent
-  adaptations.
-- The excluded periphery implementations preserve PancakeSwap or
-  Ramses/Uniswap behavior with equivalent adaptations.
-- `src/core/CLEnumerable.sol` is semantically equivalent to PancakeSwap
-  MasterChef V3 `Enumerable.sol`; internal helpers were inlined without changing
-  the state transition.
-- Interfaces and `ApexErrors.sol` contain declarations rather than executable
-  protocol logic.
+An issue caused by an in-scope Apex delta interacting with excluded inherited
+code remains in scope.
 
-An issue caused by an in-scope Apex delta interacting with an out-of-scope
-dependency remains in scope.
+## External Dependencies and Other Material
 
-## External Dependencies — Out of Scope
+OpenZeppelin Contracts `5.0.2` and `3.4.2-solc-0.7` are excluded as audited
+dependencies; Apex integration with them remains in scope.
 
-| Dependency | Version | Treatment |
-| --- | --- | --- |
-| OpenZeppelin Contracts | `5.0.2` | Implementation excluded; Apex integration included |
-| OpenZeppelin Contracts | `3.4.2-solc-0.7` | Implementation excluded; Apex integration included |
-
-Dependency source is vendored under `lib/**`.
-
-## Other Repository Material — Out of Scope
+The following repository material is not implementation scope:
 
 ```text
 test/**
@@ -180,7 +119,6 @@ README.md
 AUDIT_NOTES.md
 ```
 
-Tests are supporting evidence. `AUDIT_NOTES.md` separately documents protocol
+Tests are supporting evidence. `AUDIT_NOTES.md` separately contains protocol
 architecture, intended behavior, integration assumptions, known findings, and
-developer responses. Deployment and off-chain applications are outside this
-contract source scope.
+developer responses.
