@@ -54,8 +54,8 @@ contract CLPool is ICLPool {
     uint128 public immutable override maxLiquidityPerTick;
 
     uint32 internal constant PROTOCOL_FEE_SP = 65_536;
-    // The deployed CL factory's pool creation bytecode is immutable. New CL pools are normalized
-    // to the controller's ungauged policy with applyUngaugedProtocolFees after creation.
+    // The deployed CL factory's pool creation bytecode is immutable. Governance can override
+    // a new pool's initialization fallback through the controller when necessary.
     uint32 internal constant DEFAULT_PROTOCOL_FEE = 1_000; // 10% initialization fallback
     uint32 internal constant DEFAULT_PROTOCOL_FEE_PACKED = DEFAULT_PROTOCOL_FEE + (DEFAULT_PROTOCOL_FEE << 16);
 

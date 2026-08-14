@@ -65,7 +65,7 @@ contract SymbolicVeNFT is ERC721 {
 }
 
 contract SymbolicVaultAndFeesTest is Test {
-    uint256 internal constant MIN_DEPOSIT_AMOUNT = 10_000;
+    uint256 internal constant MIN_DEPOSIT_AMOUNT = 1 ether;
     uint256 internal constant MAX_APEX_WEIGHT = 1_000_000_000e18;
     uint256 internal constant DEFAULT_DURATION = 7 days;
     uint256 internal constant MAX_SYMBOLIC_REWARD = 1_000_000_000 ether;

@@ -70,7 +70,7 @@ contract VaultFuzzVeNFT is ERC721 {
 }
 
 contract ApexVaultMathFuzzTest is Test {
-    uint256 internal constant MIN_DEPOSIT_AMOUNT = 10_000;
+    uint256 internal constant MIN_DEPOSIT_AMOUNT = 1 ether;
     uint256 internal constant MAX_ALLOCATIONS = 16;
     uint256 internal constant MAX_APEX_WEIGHT = 1_000_000_000e18;
     uint256 internal constant DEFAULT_DURATION = 7 days;
@@ -86,6 +86,10 @@ contract ApexVaultMathFuzzTest is Test {
         apex = new VaultFuzzERC20("Apex", "APEX", 18);
         veNFT = new VaultFuzzVeNFT(IERC20(address(apex)));
         vault = _deployVaultProxy(address(veNFT), address(this), DEFAULT_DURATION);
+    }
+
+    function testMinimumDepositAmountIsOneToken() public view {
+        assertEq(vault.MIN_DEPOSIT_AMOUNT(), 1 ether);
     }
 
     function testVaultRejectsBelowMinimumLockWeight() public {
@@ -139,12 +143,13 @@ contract ApexVaultMathFuzzTest is Test {
         vault.stake(1, configs, uint16(10_000 - claimableCount));
         vm.stopPrank();
 
+        uint256 oneBpWeight = MIN_DEPOSIT_AMOUNT / 10_000;
         for (uint256 i; i < claimableCount; ++i) {
             (, uint256 weight) = vault.userConfigOf(1, configs[i].rewardToken);
-            assertEq(weight, 1, "one bp claimable split should receive one raw unit");
+            assertEq(weight, oneBpWeight, "one bp claimable split should receive proportional weight");
         }
         (, uint256 compoundWeight) = vault.compoundConfigOf(1);
-        assertEq(compoundWeight, MIN_DEPOSIT_AMOUNT - claimableCount);
+        assertEq(compoundWeight, MIN_DEPOSIT_AMOUNT - (oneBpWeight * claimableCount));
     }
 
     function testFuzzSingleUserLowDecimalStreamDustIsBounded(

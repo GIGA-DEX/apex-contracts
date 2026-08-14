@@ -46,8 +46,6 @@ interface IApexController {
 
     function clGlobalProtocolFee() external view returns (uint32);
 
-    function applyUngaugedProtocolFees(address[] calldata classicPairs, address[] calldata clPools) external;
-
     function setLmPoolDeployer(address lmPoolDeployer) external;
 
     function setCLMasterChefEmergency(bool emergency) external;
@@ -99,9 +97,10 @@ interface IApexController {
     function executeFeeReceiverSwap(
         address receiver,
         address tokenIn,
-        address swapper,
+        address target,
         uint256 amount,
-        uint256 minAmountOut
+        uint256 minAmountOut,
+        bytes calldata data
     ) external returns (uint256 spent, uint256 received);
 
     function notifyFeeReceiverVault(address receiver, uint256 amount) external;

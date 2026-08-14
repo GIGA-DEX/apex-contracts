@@ -21,9 +21,10 @@ interface IFeeCenter {
     function executeReceiverSwap(
         address _receiver,
         address _tokenIn,
-        address _swapper,
+        address _target,
         uint256 _amount,
-        uint256 _minAmountOut
+        uint256 _minAmountOut,
+        bytes calldata _data
     ) external returns (uint256 spent, uint256 received);
 
     function notifyReceiverVault(address _receiver, uint256 _amount) external;

@@ -96,6 +96,7 @@ contract FeeCenter is IFeeCenter, IBeacon, Initializable, ReentrancyGuardUpgrade
 
     function setSwapper(address _swapper, bool _status) external onlyApexController {
         require(_swapper != address(0), ApexErrors.ZERO_ADDRESS());
+        if (_status) require(_swapper.code.length != 0, ApexErrors.INVALID_TARGET(_swapper));
         FeeCenterStorage.layout().isSwapper[_swapper] = _status;
 
         emit SwapperSet(_swapper, _status);
@@ -147,14 +148,15 @@ contract FeeCenter is IFeeCenter, IBeacon, Initializable, ReentrancyGuardUpgrade
     function executeReceiverSwap(
         address _receiver,
         address _tokenIn,
-        address _swapper,
+        address _target,
         uint256 _amount,
-        uint256 _minAmountOut
+        uint256 _minAmountOut,
+        bytes calldata _data
     ) external onlyApexController nonReentrant returns (uint256 spent, uint256 received) {
         FeeCenterStorage.Layout storage s = FeeCenterStorage.layout();
         require(s.receiverOutput[_receiver] != address(0), ApexErrors.NOT_AUTHORIZED(_receiver));
-        require(s.isSwapper[_swapper], ApexErrors.NOT_AUTHORIZED(_swapper));
-        return FeeReceiver(_receiver).executeSwap(_tokenIn, _swapper, _amount, _minAmountOut);
+        require(s.isSwapper[_target], ApexErrors.NOT_AUTHORIZED(_target));
+        return FeeReceiver(_receiver).executeSwap(_tokenIn, _target, _amount, _minAmountOut, _data);
     }
 
     function notifyReceiverVault(address _receiver, uint256 _amount) external onlyApexController {

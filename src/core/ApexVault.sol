@@ -27,7 +27,7 @@ contract ApexVault is Initializable, IERC721Receiver, ReentrancyGuardUpgradeable
     uint256 public constant BPS = 10_000;
     uint256 public constant PRECISION = 1e27;
     uint256 public constant MAX_ALLOCATIONS = 16;
-    uint256 public constant MIN_DEPOSIT_AMOUNT = BPS;
+    uint256 public constant MIN_DEPOSIT_AMOUNT = 1 ether;
     uint256 internal constant WEEK = 1 weeks;
 
     event VaultInitialized(address indexed veNFT, address indexed apexController);

@@ -47,25 +47,6 @@ library ApexControllerFeePolicy {
         return stored == 0 ? DEFAULT_CL_PROTOCOL_FEE : stored - 1;
     }
 
-    function applyUngaugedProtocolFees(address[] calldata classicPairs, address[] calldata clPools) external {
-        ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        IClassicFactory classicFactory = s.classicFactory;
-        uint256 classicProtocolFee = classicFactory.protocolFee();
-        for (uint256 i; i < classicPairs.length; ++i) {
-            address pair = classicPairs[i];
-            require(!s.activeFarm[pair], ApexErrors.FARM_ACTIVE(pair));
-            require(classicFactory.isPair(pair), ApexErrors.NOT_PAIR(pair));
-            classicFactory.setPairProtocolFee(pair, classicProtocolFee);
-        }
-
-        uint32 clProtocolFee = _clGlobalProtocolFee(s);
-        for (uint256 i; i < clPools.length; ++i) {
-            address pool = clPools[i];
-            require(!s.activeFarm[pool], ApexErrors.FARM_ACTIVE(pool));
-            _canonicalCLFactory(s, pool).setFeeProtocol(pool, clProtocolFee, clProtocolFee);
-        }
-    }
-
     function overrideClassicFeeReceiver(address pair, address feeReceiver) external {
         IClassicFactory factory = ApexControllerStorage.layout().classicFactory;
         require(factory.isPair(pair), ApexErrors.NOT_PAIR(pair));
@@ -104,6 +85,18 @@ library ApexControllerFeePolicy {
         require(s.classicFactory.isPair(pair), ApexErrors.NOT_PAIR(pair));
         IClassicPool(pair).mintFee();
         return s.feeCenter.realizeClassicFees(pair);
+    }
+
+    function executeFeeReceiverSwap(
+        address receiver,
+        address tokenIn,
+        address target,
+        uint256 amount,
+        uint256 minAmountOut,
+        bytes calldata data
+    ) external returns (uint256 spent, uint256 received) {
+        return ApexControllerStorage.layout().feeCenter
+            .executeReceiverSwap(receiver, tokenIn, target, amount, minAmountOut, data);
     }
 
     function setLmPoolDeployer(address lmPoolDeployer) external {

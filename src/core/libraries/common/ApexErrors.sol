@@ -7,6 +7,7 @@ library ApexErrors {
     error INVALID_ASSORTMENT();
     error INVALID_DURATION();
     error INVALID_POOL(address pool);
+    error INVALID_TARGET(address target);
     error FARM_INACTIVE(address pool);
     error FARM_ACTIVE(address pool);
     error LENGTH_MISMATCH();

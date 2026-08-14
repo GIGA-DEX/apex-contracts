@@ -19,8 +19,9 @@ import {FeeCenter} from "../src/core/FeeCenter.sol";
 import {FeeReceiver} from "../src/core/FeeReceiver.sol";
 import {IApexController} from "../src/core/interfaces/IApexController.sol";
 import {IVotingEscrow} from "../src/core/interfaces/IVotingEscrow.sol";
-import {IFeeSwapper} from "../src/core/interfaces/IFeeSwapper.sol";
 import {ApexErrors} from "../src/core/libraries/common/ApexErrors.sol";
+
+error MockSwapFailed();
 
 contract ApexEmissionMockERC20 is ERC20 {
     constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
@@ -76,21 +77,24 @@ contract ApexMockVeNFT is ERC721 {
     }
 }
 
-contract ApexMockSwapper is IFeeSwapper {
+contract ApexMockSwapper {
     uint256 public amountOut;
+    address public lastCaller;
+    bool public shouldRevert;
 
     function setAmountOut(uint256 _amountOut) external {
         amountOut = _amountOut;
     }
 
-    function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, address recipient)
-        external
-        returns (uint256 amountOut_)
-    {
-        amountOut_ = amountOut;
-        require(amountOut_ >= minAmountOut, "insufficient output");
+    function setShouldRevert(bool _shouldRevert) external {
+        shouldRevert = _shouldRevert;
+    }
+
+    function swap(address tokenIn, address tokenOut, uint256 amountIn, address recipient) external {
+        if (shouldRevert) revert MockSwapFailed();
+        lastCaller = msg.sender;
         require(ERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "transfer failed");
-        ApexEmissionMockERC20(tokenOut).mint(recipient, amountOut_);
+        ApexEmissionMockERC20(tokenOut).mint(recipient, amountOut);
     }
 }
 
@@ -341,47 +345,7 @@ contract ApexControllerEmissionsTest is Test {
         controller.setClassicGlobalProtocolFee(200_000);
         vm.expectRevert();
         controller.setCLGlobalProtocolFee(2_000);
-        address[] memory classicPairs = new address[](1);
-        classicPairs[0] = classicPair;
-        address[] memory clPools = new address[](1);
-        clPools[0] = address(clPool);
-        vm.expectRevert();
-        controller.applyUngaugedProtocolFees(classicPairs, clPools);
         vm.stopPrank();
-    }
-
-    function testFeeOperatorCanBatchApplyUngaugedProtocolFeePolicy() public {
-        controller.setClassicGlobalProtocolFee(250_000);
-        controller.setCLGlobalProtocolFee(3_000);
-        controller.overrideClassicProtocolFee(classicPair, 123_456);
-        controller.overrideCLProtocolFee(address(clPool), 4_000, 5_000);
-
-        address[] memory classicPairs = new address[](1);
-        classicPairs[0] = classicPair;
-        address[] memory clPools = new address[](1);
-        clPools[0] = address(clPool);
-        controller.applyUngaugedProtocolFees(classicPairs, clPools);
-
-        assertEq(ClassicPool(classicPair).protocolFee(), 250_000);
-        (uint32 feeProtocol0, uint32 feeProtocol1) = clFactory.feeProtocols(address(clPool));
-        assertEq(feeProtocol0, 3_000);
-        assertEq(feeProtocol1, 3_000);
-    }
-
-    function testUngaugedProtocolFeeApplicationRejectsActiveFarms() public {
-        address[] memory classicPairs = new address[](1);
-        classicPairs[0] = classicPair;
-        address[] memory noCLPools = new address[](0);
-        controller.activateClassicFarm(classicPair, 0);
-        vm.expectRevert(abi.encodeWithSelector(ApexErrors.FARM_ACTIVE.selector, classicPair));
-        controller.applyUngaugedProtocolFees(classicPairs, noCLPools);
-
-        address[] memory noClassicPairs = new address[](0);
-        address[] memory clPools = new address[](1);
-        clPools[0] = address(clPool);
-        controller.activateCLFarm(address(clPool), 0);
-        vm.expectRevert(abi.encodeWithSelector(ApexErrors.FARM_ACTIVE.selector, address(clPool)));
-        controller.applyUngaugedProtocolFees(noClassicPairs, clPools);
     }
 
     function testFarmDeactivationRestoresConfiguredUngaugedProtocolFeePolicy() public {
@@ -1317,13 +1281,116 @@ contract ApexControllerEmissionsTest is Test {
         address receiver = controller.addFeeReceiver(address(feeToken));
         tokenA.mint(receiver, 100 ether);
 
-        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+        (uint256 spent, uint256 received) =
+            controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+
+        assertEq(spent, 100 ether);
+        assertEq(received, 90 ether);
+        assertEq(swapper.lastCaller(), receiver);
+        assertEq(tokenA.allowance(receiver, address(swapper)), 0);
+
         controller.notifyFeeReceiverVaultBalance(receiver);
 
         vm.warp(block.timestamp + 7 days);
 
         assertApproxEqAbs(vault.pendingReward(1, address(feeToken)), 90 ether, 1e15);
         assertEq(feeToken.balanceOf(address(vault)), 90 ether);
+    }
+
+    function testFeeReceiverSwapRejectsUnapprovedTarget() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.NOT_AUTHORIZED.selector, address(swapper)));
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+    }
+
+    function testFeeReceiverSwapRejectsCallerWithoutOperatorRole() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        swapper.setAmountOut(90 ether);
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+
+        vm.prank(alice);
+        vm.expectRevert();
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+    }
+
+    function testFeeReceiverSwapRejectsZeroMinimumOutput() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+
+        vm.expectRevert(ApexErrors.ZERO_AMOUNT.selector);
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 0, data);
+    }
+
+    function testFeeReceiverSwapRevertsWhenCalldataSendsOutputElsewhere() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        swapper.setAmountOut(90 ether);
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data = abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, bob));
+
+        vm.expectRevert(ApexErrors.INSUFFICIENT_OUTPUT_AMOUNT.selector);
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+
+        assertEq(tokenA.balanceOf(receiver), 100 ether);
+        assertEq(tokenA.balanceOf(address(swapper)), 0);
+        assertEq(feeToken.balanceOf(bob), 0);
+        assertEq(tokenA.allowance(receiver, address(swapper)), 0);
+    }
+
+    function testFeeReceiverSwapRevertsWhenOutputIsBelowMinimum() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        swapper.setAmountOut(89 ether);
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+
+        vm.expectRevert(ApexErrors.INSUFFICIENT_OUTPUT_AMOUNT.selector);
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+
+        assertEq(tokenA.balanceOf(receiver), 100 ether);
+        assertEq(feeToken.balanceOf(receiver), 0);
+        assertEq(tokenA.allowance(receiver, address(swapper)), 0);
+    }
+
+    function testFeeReceiverSwapBubblesTargetRevert() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        swapper.setShouldRevert(true);
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+
+        vm.expectRevert(MockSwapFailed.selector);
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+
+        assertEq(tokenA.balanceOf(receiver), 100 ether);
+        assertEq(tokenA.allowance(receiver, address(swapper)), 0);
+    }
+
+    function testCannotWhitelistNonContractSwapper() public {
+        address nonContract = address(0xBEEF);
+
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.INVALID_TARGET.selector, nonContract));
+        controller.setFeeSwapper(nonContract, true);
     }
 
     function testApexVaultCompoundOnlyConfigStreamsAndRelocks() public {

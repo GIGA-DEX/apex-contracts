@@ -158,13 +158,6 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         return ApexControllerFeePolicy.clGlobalProtocolFee();
     }
 
-    function applyUngaugedProtocolFees(address[] calldata _classicPairs, address[] calldata _clPools)
-        external
-        onlyRole(FEE_OPERATOR)
-    {
-        ApexControllerFeePolicy.applyUngaugedProtocolFees(_classicPairs, _clPools);
-    }
-
     function setClassicGlobalFeeReceiver(address _feeReceiver) external onlyRole(DEFAULT_ADMIN_ROLE) {
         ApexControllerFeePolicy.setClassicGlobalFeeReceiver(_feeReceiver);
     }
@@ -620,12 +613,14 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
     function executeFeeReceiverSwap(
         address _receiver,
         address _tokenIn,
-        address _swapper,
+        address _target,
         uint256 _amount,
-        uint256 _minAmountOut
+        uint256 _minAmountOut,
+        bytes calldata _data
     ) external onlyRole(FEE_OPERATOR) nonReentrant returns (uint256 spent, uint256 received) {
-        return ApexControllerStorage.layout().feeCenter
-            .executeReceiverSwap(_receiver, _tokenIn, _swapper, _amount, _minAmountOut);
+        return ApexControllerFeePolicy.executeFeeReceiverSwap(
+                _receiver, _tokenIn, _target, _amount, _minAmountOut, _data
+            );
     }
 
     function notifyFeeReceiverVault(address _receiver, uint256 _amount) external onlyRole(FEE_OPERATOR) {
