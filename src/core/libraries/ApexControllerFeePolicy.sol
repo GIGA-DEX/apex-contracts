@@ -16,7 +16,6 @@ import {ApexControllerStorage} from "../storage/ApexControllerStorage.sol";
 
 library ApexControllerFeePolicy {
     using EnumerableSet for EnumerableSet.AddressSet;
-    using EnumerableSet for EnumerableSet.Bytes32Set;
 
     uint16 private constant BPS = 10_000;
     uint256 private constant CLASSIC_PROTOCOL_FEE_BPS_SCALE = 100;
@@ -28,22 +27,19 @@ library ApexControllerFeePolicy {
     event CLGlobalProtocolFeeSet(uint32 protocolFee);
     event EmissionCenterSet(address indexed center);
     event TreasurySet(address indexed previousTreasury, address indexed newTreasury);
-    event LauncherAgreementSet(
-        bytes32 indexed agreementId,
+    event LauncherConfigured(
+        address indexed launcher,
         address indexed recipient,
         uint16 creatorFeeBps,
         uint16 veGigaFeeBps,
         bool startGauged,
+        IApexController.LauncherPermission permission,
         bool active
     );
-    event LauncherCallerSet(
-        address indexed caller, bytes32 indexed agreementId, IApexController.LauncherPermission permission
-    );
     event LauncherPoolCreated(
-        bytes32 indexed agreementId,
         address indexed launcher,
         address indexed pool,
-        IApexController.PoolKind poolKind,
+        IApexController.PoolKind indexed poolKind,
         address recipient,
         uint16 creatorFeeBps,
         uint16 veGigaFeeBps,
@@ -59,68 +55,53 @@ library ApexControllerFeePolicy {
     event CLFarmActivated(address indexed clFactory, address indexed pool, uint256 allocPoint);
     event CLFarmDeactivated(address indexed clFactory, address indexed pool);
 
-    function setLauncherAgreement(
-        bytes32 agreementId,
+    function configureLauncher(
+        address launcher,
         address recipient,
         uint16 creatorFeeBps,
         uint16 veGigaFeeBps,
         bool startGauged,
+        IApexController.LauncherPermission permission,
         bool active
     ) external {
-        require(agreementId != bytes32(0), ApexErrors.INVALID_ASSORTMENT());
+        require(launcher != address(0), ApexErrors.ZERO_ADDRESS());
         _validateFeeSplit(recipient, creatorFeeBps, veGigaFeeBps);
+        if (active) require(permission != IApexController.LauncherPermission.NONE, ApexErrors.INVALID_ASSORTMENT());
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        s.launcherAgreementIds.add(agreementId);
-        if (active) s.activeLauncherAgreementIds.add(agreementId);
-        else s.activeLauncherAgreementIds.remove(agreementId);
-        s.launcherAgreements[agreementId] = ApexControllerStorage.LauncherAgreement({
+        s.launchers.add(launcher);
+        if (active) s.activeLaunchers.add(launcher);
+        else s.activeLaunchers.remove(launcher);
+        s.launcherConfigs[launcher] = ApexControllerStorage.LauncherConfig({
             recipient: recipient,
             creatorFeeBps: creatorFeeBps,
-            active: active,
             veGigaFeeBps: veGigaFeeBps,
-            startGauged: startGauged
+            permission: uint8(permission),
+            startGauged: startGauged,
+            active: active,
+            exists: true
         });
-        emit LauncherAgreementSet(agreementId, recipient, creatorFeeBps, veGigaFeeBps, startGauged, active);
-    }
-
-    function setLauncherCaller(address caller, bytes32 agreementId, IApexController.LauncherPermission permission)
-        external
-    {
-        require(caller != address(0), ApexErrors.ZERO_ADDRESS());
-        ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        if (permission == IApexController.LauncherPermission.NONE) {
-            delete s.launcherAuthorizations[caller];
-            s.launcherCallers.remove(caller);
-            emit LauncherCallerSet(caller, bytes32(0), permission);
-            return;
-        }
-        require(s.launcherAgreementIds.contains(agreementId), ApexErrors.INVALID_ASSORTMENT());
-        s.launcherAuthorizations[caller] =
-            ApexControllerStorage.LauncherAuthorization({agreementId: agreementId, permissions: uint8(permission)});
-        s.launcherCallers.add(caller);
-        emit LauncherCallerSet(caller, agreementId, permission);
+        emit LauncherConfigured(launcher, recipient, creatorFeeBps, veGigaFeeBps, startGauged, permission, active);
     }
 
     function createLauncherClassicPool(address tokenA, address tokenB, bool stable) external returns (address pair) {
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        (bytes32 agreementId, ApexControllerStorage.LauncherAgreement memory agreement) =
-            _launcherAgreement(s, IApexController.LauncherPermission.CLASSIC);
+        ApexControllerStorage.LauncherConfig memory config =
+            _launcherConfig(s, IApexController.LauncherPermission.CLASSIC);
         IClassicFactory factory = s.classicFactory;
         require(factory.getPair(tokenA, tokenB, stable) == address(0), ApexErrors.PAIR_EXISTS());
         pair = factory.createPair(tokenA, tokenB, stable);
 
-        _registerLauncherPool(s, agreementId, pair, IApexController.PoolKind.CLASSIC, agreement);
-        if (agreement.startGauged) _activateClassicFarm(s, pair, 0);
+        _registerLauncherPool(s, pair, IApexController.PoolKind.CLASSIC, config);
+        if (config.startGauged) _activateClassicFarm(s, pair, 0);
         else _applyLauncherBaseFee(s, pair);
         emit LauncherPoolCreated(
-            agreementId,
             msg.sender,
             pair,
             IApexController.PoolKind.CLASSIC,
-            agreement.recipient,
-            agreement.creatorFeeBps,
-            agreement.veGigaFeeBps,
-            agreement.startGauged
+            config.recipient,
+            config.creatorFeeBps,
+            config.veGigaFeeBps,
+            config.startGauged
         );
     }
 
@@ -129,26 +110,24 @@ library ApexControllerFeePolicy {
         returns (address pool)
     {
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        (bytes32 agreementId, ApexControllerStorage.LauncherAgreement memory agreement) =
-            _launcherAgreement(s, IApexController.LauncherPermission.CL);
+        ApexControllerStorage.LauncherConfig memory config = _launcherConfig(s, IApexController.LauncherPermission.CL);
         ICLFactory factory = s.clFactory;
         address existingPool = factory.getPool(tokenA, tokenB, fee);
         require(existingPool == address(0), ApexErrors.POOL_EXISTS(existingPool));
         pool = factory.createPool(tokenA, tokenB, fee);
         ICLPool(pool).initialize(sqrtPriceX96);
 
-        _registerLauncherPool(s, agreementId, pool, IApexController.PoolKind.CL, agreement);
-        if (agreement.startGauged) _activateCLFarm(s, pool, 0);
+        _registerLauncherPool(s, pool, IApexController.PoolKind.CL, config);
+        if (config.startGauged) _activateCLFarm(s, pool, 0);
         else _applyLauncherBaseFee(s, pool);
         emit LauncherPoolCreated(
-            agreementId,
             msg.sender,
             pool,
             IApexController.PoolKind.CL,
-            agreement.recipient,
-            agreement.creatorFeeBps,
-            agreement.veGigaFeeBps,
-            agreement.startGauged
+            config.recipient,
+            config.creatorFeeBps,
+            config.veGigaFeeBps,
+            config.startGauged
         );
     }
 
@@ -406,38 +385,35 @@ library ApexControllerFeePolicy {
         emit EmissionCenterSet(center);
     }
 
-    function launcherAgreement(bytes32 agreementId)
+    function launcherConfig(address launcher)
         external
         view
-        returns (address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps, bool startGauged, bool active)
+        returns (
+            address recipient,
+            uint16 creatorFeeBps,
+            uint16 veGigaFeeBps,
+            bool startGauged,
+            IApexController.LauncherPermission permission,
+            bool active,
+            bool configured
+        )
     {
-        ApexControllerStorage.LauncherAgreement memory agreement =
-            ApexControllerStorage.layout().launcherAgreements[agreementId];
-        return
-            (
-                agreement.recipient,
-                agreement.creatorFeeBps,
-                agreement.veGigaFeeBps,
-                agreement.startGauged,
-                agreement.active
-            );
-    }
-
-    function launcherAuthorization(address caller)
-        external
-        view
-        returns (bytes32 agreementId, IApexController.LauncherPermission permission)
-    {
-        ApexControllerStorage.LauncherAuthorization memory authorization =
-            ApexControllerStorage.layout().launcherAuthorizations[caller];
-        return (authorization.agreementId, IApexController.LauncherPermission(authorization.permissions));
+        ApexControllerStorage.LauncherConfig memory config = ApexControllerStorage.layout().launcherConfigs[launcher];
+        return (
+            config.recipient,
+            config.creatorFeeBps,
+            config.veGigaFeeBps,
+            config.startGauged,
+            IApexController.LauncherPermission(config.permission),
+            config.active,
+            config.exists
+        );
     }
 
     function launcherPoolConfig(address pool)
         external
         view
         returns (
-            bytes32 agreementId,
             address launcher,
             address recipient,
             uint16 creatorFeeBps,
@@ -450,7 +426,6 @@ library ApexControllerFeePolicy {
         ApexControllerStorage.LauncherPoolConfig memory poolConfig = s.launcherPoolConfigs[pool];
         require(poolConfig.exists, ApexErrors.INVALID_POOL(pool));
         IFeeCenter.CreatorFeeConfig memory creatorConfig = s.feeCenter.creatorFeeConfig(pool);
-        agreementId = poolConfig.agreementId;
         launcher = poolConfig.launcher;
         recipient = creatorConfig.recipient;
         creatorFeeBps = creatorConfig.feeBps;
@@ -459,13 +434,9 @@ library ApexControllerFeePolicy {
         gauged = s.activeFarm[pool];
     }
 
-    function launcherAgreementIds(bool activeOnly) external view returns (bytes32[] memory) {
+    function launchers(bool activeOnly) external view returns (address[] memory) {
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        return activeOnly ? s.activeLauncherAgreementIds.values() : s.launcherAgreementIds.values();
-    }
-
-    function launcherCallers() external view returns (address[] memory) {
-        return ApexControllerStorage.layout().launcherCallers.values();
+        return activeOnly ? s.activeLaunchers.values() : s.launchers.values();
     }
 
     function launcherPools() external view returns (address[] memory) {
@@ -476,12 +447,8 @@ library ApexControllerFeePolicy {
         return ApexControllerStorage.layout().activeLauncherPools.values();
     }
 
-    function launcherPoolsByAgreement(bytes32 agreementId) external view returns (address[] memory) {
-        return ApexControllerStorage.layout().launcherPoolsByAgreement[agreementId].values();
-    }
-
-    function launcherPoolsByCaller(address caller) external view returns (address[] memory) {
-        return ApexControllerStorage.layout().launcherPoolsByCaller[caller].values();
+    function launcherPoolsByLauncher(address launcher) external view returns (address[] memory) {
+        return ApexControllerStorage.layout().launcherPoolsByLauncher[launcher].values();
     }
 
     function _clGlobalProtocolFee(ApexControllerStorage.Layout storage s) private view returns (uint32) {
@@ -513,40 +480,32 @@ library ApexControllerFeePolicy {
         s.feeCenter.distributeCLCreatorFees(pool, amount0, amount1, feeProtocol0, feeProtocol1);
     }
 
-    function _launcherAgreement(
+    function _launcherConfig(
         ApexControllerStorage.Layout storage s,
         IApexController.LauncherPermission requiredPermission
-    ) private view returns (bytes32 agreementId, ApexControllerStorage.LauncherAgreement memory agreement) {
-        ApexControllerStorage.LauncherAuthorization memory authorization = s.launcherAuthorizations[msg.sender];
-        IApexController.LauncherPermission permission = IApexController.LauncherPermission(authorization.permissions);
+    ) private view returns (ApexControllerStorage.LauncherConfig memory config) {
+        config = s.launcherConfigs[msg.sender];
+        IApexController.LauncherPermission permission = IApexController.LauncherPermission(config.permission);
         require(
-            permission == requiredPermission || permission == IApexController.LauncherPermission.BOTH,
+            config.active
+                && (permission == requiredPermission || permission == IApexController.LauncherPermission.BOTH),
             ApexErrors.NOT_AUTHORIZED(msg.sender)
         );
-        agreementId = authorization.agreementId;
-        agreement = s.launcherAgreements[agreementId];
-        require(agreement.active, ApexErrors.NOT_AUTHORIZED(msg.sender));
     }
 
     function _registerLauncherPool(
         ApexControllerStorage.Layout storage s,
-        bytes32 agreementId,
         address pool,
         IApexController.PoolKind poolKind,
-        ApexControllerStorage.LauncherAgreement memory agreement
+        ApexControllerStorage.LauncherConfig memory config
     ) private {
         require(!s.launcherPoolConfigs[pool].exists, ApexErrors.POOL_EXISTS(pool));
         s.launcherPoolConfigs[pool] = ApexControllerStorage.LauncherPoolConfig({
-            agreementId: agreementId,
-            launcher: msg.sender,
-            veGigaFeeBps: agreement.veGigaFeeBps,
-            poolKind: uint8(poolKind),
-            exists: true
+            launcher: msg.sender, veGigaFeeBps: config.veGigaFeeBps, poolKind: uint8(poolKind), exists: true
         });
         s.launcherPools.add(pool);
-        s.launcherPoolsByAgreement[agreementId].add(pool);
-        s.launcherPoolsByCaller[msg.sender].add(pool);
-        s.feeCenter.setCreatorFeeConfig(pool, agreement.recipient, agreement.creatorFeeBps, uint8(poolKind));
+        s.launcherPoolsByLauncher[msg.sender].add(pool);
+        s.feeCenter.setCreatorFeeConfig(pool, config.recipient, config.creatorFeeBps, uint8(poolKind));
     }
 
     function _applyLauncherBaseFee(ApexControllerStorage.Layout storage s, address pool) private {

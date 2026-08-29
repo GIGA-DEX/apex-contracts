@@ -84,19 +84,18 @@ interface IApexController {
 
     function collectLauncherClassicProtocolFees(address pair) external returns (uint256 amount0, uint256 amount1);
 
-    /// @notice Sets terms used by pools created after this call.
+    /// @notice Configures and authorizes a launcher in one admin operation.
     /// @param veGigaFeeBps Base veGIGA share while ungauged; LPs receive the remaining gross-fee share.
     /// @param startGauged If true, creation registers the farm at zero emission weight and gives LPs zero swap fees.
-    function setLauncherAgreement(
-        bytes32 agreementId,
+    function configureLauncher(
+        address launcher,
         address recipient,
         uint16 creatorFeeBps,
         uint16 veGigaFeeBps,
         bool startGauged,
+        LauncherPermission permission,
         bool active
     ) external;
-
-    function setLauncherCaller(address caller, bytes32 agreementId, LauncherPermission permission) external;
 
     /// @notice Settles existing fees, then updates a launcher's per-pool creator and base veGIGA split.
     function updateLauncherPoolFeeSplit(address pool, address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps)
@@ -108,21 +107,23 @@ interface IApexController {
         external
         returns (address pool);
 
-    function launcherAgreement(bytes32 agreementId)
+    function launcherConfig(address launcher)
         external
         view
-        returns (address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps, bool startGauged, bool active);
-
-    function launcherAuthorization(address caller)
-        external
-        view
-        returns (bytes32 agreementId, LauncherPermission permission);
+        returns (
+            address recipient,
+            uint16 creatorFeeBps,
+            uint16 veGigaFeeBps,
+            bool startGauged,
+            LauncherPermission permission,
+            bool active,
+            bool configured
+        );
 
     function launcherPoolConfig(address pool)
         external
         view
         returns (
-            bytes32 agreementId,
             address launcher,
             address recipient,
             uint16 creatorFeeBps,
@@ -131,17 +132,13 @@ interface IApexController {
             bool gauged
         );
 
-    function launcherAgreementIds(bool activeOnly) external view returns (bytes32[] memory);
-
-    function launcherCallers() external view returns (address[] memory);
+    function launchers(bool activeOnly) external view returns (address[] memory);
 
     function launcherPools() external view returns (address[] memory);
 
     function activeLauncherPools() external view returns (address[] memory);
 
-    function launcherPoolsByAgreement(bytes32 agreementId) external view returns (address[] memory);
-
-    function launcherPoolsByCaller(address caller) external view returns (address[] memory);
+    function launcherPoolsByLauncher(address launcher) external view returns (address[] memory);
 
     function notifyVaultReward(address token, uint256 amount) external;
 

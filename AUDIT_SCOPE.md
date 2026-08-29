@@ -21,14 +21,14 @@ the fork-delta scope.
 
 | File | Code LoC |
 | --- | ---: |
-| `src/core/ApexController.sol` | 642 |
+| `src/core/ApexController.sol` | 630 |
 | `src/core/ApexToken.sol` | 12 |
 | `src/core/ApexVault.sol` | 642 |
 | `src/core/EmissionCenter.sol` | 25 |
 | `src/core/FeeCenter.sol` | 273 |
 | `src/core/FeeReceiver.sol` | 95 |
-| `src/core/libraries/ApexControllerFeePolicy.sol` | 589 |
-| `src/core/storage/ApexControllerStorage.sol` | 71 |
+| `src/core/libraries/ApexControllerFeePolicy.sol` | 552 |
+| `src/core/storage/ApexControllerStorage.sol` | 64 |
 | `src/core/storage/ApexVaultStorage.sol` | 48 |
 | `src/core/storage/FeeCenterStorage.sol` | 26 |
 | `src/core/storage/FeeReceiverStorage.sol` | 15 |
@@ -37,7 +37,7 @@ the fork-delta scope.
 | `src/periphery/SimplePositionDescriptor.sol` | 25 |
 | `src/periphery/SmartRouter.sol` | 266 |
 | `src/periphery/libraries/MixedRoute.sol` | 19 |
-| **Total** | **2,979** |
+| **Total** | **2,923** |
 
 ## Fork-Delta Files
 

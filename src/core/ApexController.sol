@@ -56,20 +56,19 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
     event RewardPaid(address indexed pool, address indexed to, uint256 amount);
     event RewardForfeited(address indexed pool, uint256 amount);
     event EmissionCenterSet(address indexed center);
-    event LauncherAgreementSet(
-        bytes32 indexed agreementId,
+    event LauncherConfigured(
+        address indexed launcher,
         address indexed recipient,
         uint16 creatorFeeBps,
         uint16 veGigaFeeBps,
         bool startGauged,
+        LauncherPermission permission,
         bool active
     );
-    event LauncherCallerSet(address indexed caller, bytes32 indexed agreementId, LauncherPermission permission);
     event LauncherPoolCreated(
-        bytes32 indexed agreementId,
         address indexed launcher,
         address indexed pool,
-        PoolKind poolKind,
+        PoolKind indexed poolKind,
         address recipient,
         uint16 creatorFeeBps,
         uint16 veGigaFeeBps,
@@ -233,24 +232,18 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         return ApexControllerFeePolicy.collectLauncherClassicProtocolFees(_pair);
     }
 
-    function setLauncherAgreement(
-        bytes32 _agreementId,
+    function configureLauncher(
+        address _launcher,
         address _recipient,
         uint16 _creatorFeeBps,
         uint16 _veGigaFeeBps,
         bool _startGauged,
+        LauncherPermission _permission,
         bool _active
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        ApexControllerFeePolicy.setLauncherAgreement(
-            _agreementId, _recipient, _creatorFeeBps, _veGigaFeeBps, _startGauged, _active
+        ApexControllerFeePolicy.configureLauncher(
+            _launcher, _recipient, _creatorFeeBps, _veGigaFeeBps, _startGauged, _permission, _active
         );
-    }
-
-    function setLauncherCaller(address _caller, bytes32 _agreementId, LauncherPermission _permission)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-    {
-        ApexControllerFeePolicy.setLauncherCaller(_caller, _agreementId, _permission);
     }
 
     function updateLauncherPoolFeeSplit(address _pool, address _recipient, uint16 _creatorFeeBps, uint16 _veGigaFeeBps)
@@ -276,27 +269,26 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         return ApexControllerFeePolicy.createLauncherCLPool(_tokenA, _tokenB, _fee, _sqrtPriceX96);
     }
 
-    function launcherAgreement(bytes32 _agreementId)
+    function launcherConfig(address _launcher)
         external
         view
-        returns (address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps, bool startGauged, bool active)
+        returns (
+            address recipient,
+            uint16 creatorFeeBps,
+            uint16 veGigaFeeBps,
+            bool startGauged,
+            LauncherPermission permission,
+            bool active,
+            bool configured
+        )
     {
-        return ApexControllerFeePolicy.launcherAgreement(_agreementId);
-    }
-
-    function launcherAuthorization(address _caller)
-        external
-        view
-        returns (bytes32 agreementId, LauncherPermission permission)
-    {
-        return ApexControllerFeePolicy.launcherAuthorization(_caller);
+        return ApexControllerFeePolicy.launcherConfig(_launcher);
     }
 
     function launcherPoolConfig(address _pool)
         external
         view
         returns (
-            bytes32 agreementId,
             address launcher,
             address recipient,
             uint16 creatorFeeBps,
@@ -308,12 +300,8 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         return ApexControllerFeePolicy.launcherPoolConfig(_pool);
     }
 
-    function launcherAgreementIds(bool _activeOnly) external view returns (bytes32[] memory) {
-        return ApexControllerFeePolicy.launcherAgreementIds(_activeOnly);
-    }
-
-    function launcherCallers() external view returns (address[] memory) {
-        return ApexControllerFeePolicy.launcherCallers();
+    function launchers(bool _activeOnly) external view returns (address[] memory) {
+        return ApexControllerFeePolicy.launchers(_activeOnly);
     }
 
     function launcherPools() external view returns (address[] memory) {
@@ -324,12 +312,8 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         return ApexControllerFeePolicy.activeLauncherPools();
     }
 
-    function launcherPoolsByAgreement(bytes32 _agreementId) external view returns (address[] memory) {
-        return ApexControllerFeePolicy.launcherPoolsByAgreement(_agreementId);
-    }
-
-    function launcherPoolsByCaller(address _caller) external view returns (address[] memory) {
-        return ApexControllerFeePolicy.launcherPoolsByCaller(_caller);
+    function launcherPoolsByLauncher(address _launcher) external view returns (address[] memory) {
+        return ApexControllerFeePolicy.launcherPoolsByLauncher(_launcher);
     }
 
     // farms

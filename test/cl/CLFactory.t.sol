@@ -201,10 +201,10 @@ contract CLFactoryTest is Test {
     function testApexControllerCreatesAndRegistersLauncherPoolThroughCanonicalFactory() public {
         (ApexController controller, ICLFactoryHarness controllerFactory) =
             _deployControllerAndFactory(address(this), address(0xA9E7));
-        bytes32 agreementId = keccak256("NTROPY");
         address recipient = address(0xC0FFEE);
-        controller.setLauncherAgreement(agreementId, recipient, 500, 1_500, false, true);
-        controller.setLauncherCaller(address(this), agreementId, IApexController.LauncherPermission.CL);
+        controller.configureLauncher(
+            address(this), recipient, 500, 1_500, false, IApexController.LauncherPermission.CL, true
+        );
 
         address pool = controller.createLauncherCLPool(tokenA, tokenB, 3000, SQRT_PRICE_1_1);
 
