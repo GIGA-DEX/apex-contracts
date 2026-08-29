@@ -3,19 +3,20 @@ pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import {IApexVault} from "./interfaces/IApexVault.sol";
 import {IFeeCenter} from "./interfaces/IFeeCenter.sol";
-import {IFeeSwapper} from "./interfaces/IFeeSwapper.sol";
 import {ApexErrors} from "./libraries/common/ApexErrors.sol";
 import {FeeReceiverStorage} from "./storage/FeeReceiverStorage.sol";
 
 contract FeeReceiver is Initializable, ReentrancyGuardUpgradeable {
     using SafeERC20 for IERC20;
+    using Address for address;
 
-    event SwapExecuted(address indexed tokenIn, address indexed swapper, uint256 spent, uint256 received);
+    event SwapExecuted(address indexed tokenIn, address indexed target, uint256 spent, uint256 received);
     event VaultNotified(address indexed outputToken, uint256 amount);
     event VaultCompoundNotified(address indexed outputToken, uint256 amount);
     event TokenRescued(address indexed token, address indexed to, uint256 amount);
@@ -41,28 +42,29 @@ contract FeeReceiver is Initializable, ReentrancyGuardUpgradeable {
         s.outputToken = _outputToken;
     }
 
-    function executeSwap(address _tokenIn, address _swapper, uint256 _amount, uint256 _minAmountOut)
-        external
-        onlyFeeCenter
-        nonReentrant
-        returns (uint256 spent, uint256 received)
-    {
+    function executeSwap(
+        address _tokenIn,
+        address _target,
+        uint256 _amount,
+        uint256 _minAmountOut,
+        bytes calldata _data
+    ) external onlyFeeCenter nonReentrant returns (uint256 spent, uint256 received) {
         address outputToken_ = FeeReceiverStorage.layout().outputToken;
-        require(_tokenIn != address(0) && _tokenIn != outputToken_ && _swapper != address(0), ApexErrors.ZERO_ADDRESS());
-        require(_amount != 0, ApexErrors.ZERO_AMOUNT());
+        require(_tokenIn != address(0) && _tokenIn != outputToken_ && _target != address(0), ApexErrors.ZERO_ADDRESS());
+        require(_amount != 0 && _minAmountOut != 0, ApexErrors.ZERO_AMOUNT());
 
         uint256 inputBefore = IERC20(_tokenIn).balanceOf(address(this));
         uint256 outputBefore = IERC20(outputToken_).balanceOf(address(this));
 
-        IERC20(_tokenIn).forceApprove(_swapper, _amount);
-        IFeeSwapper(_swapper).swap(_tokenIn, outputToken_, _amount, _minAmountOut, address(this));
-        IERC20(_tokenIn).forceApprove(_swapper, 0);
+        IERC20(_tokenIn).forceApprove(_target, _amount);
+        _target.functionCall(_data);
+        IERC20(_tokenIn).forceApprove(_target, 0);
 
         spent = inputBefore - IERC20(_tokenIn).balanceOf(address(this));
         received = IERC20(outputToken_).balanceOf(address(this)) - outputBefore;
         require(spent != 0 && received >= _minAmountOut, ApexErrors.INSUFFICIENT_OUTPUT_AMOUNT());
 
-        emit SwapExecuted(_tokenIn, _swapper, spent, received);
+        emit SwapExecuted(_tokenIn, _target, spent, received);
     }
 
     function notifyVault(uint256 _amount) public onlyFeeCenter nonReentrant {

@@ -2,7 +2,7 @@
 
 This file records the intended architecture, intentional product deltas, and known accepted caveats for the Apex audit scope. The project generally preserves compatibility with established upstream designs where practical, especially in the Pancake-style CL stack and periphery.
 
-Last reviewed: 2026-07-21 against contract source baseline `a4b51b097b8f2cb663f6adf56a8bc5205229e86f`.
+Last reconciled for audit: 2026-08-29 against contract source tree `af289dce21d2efb13b7c22ac6ee3c3b5624a0659`. The immutable repository handoff commit is recorded separately so this document does not attempt to self-reference its own commit hash.
 
 This is triage context, not a request to suppress independent validation. Auditors should verify every developer response against the reviewed source. The public auditor mirror contains `src`, non-deployment tests, vendored libraries, and this file. Deployment configuration, broadcast records, signing operations, and private release automation are outside that public mirror unless supplied separately.
 
@@ -113,9 +113,20 @@ All Apex-owned transparent-upgradeable contracts keep mutable project state behi
 - `FeeCenter` is both fee intake and receiver factory/registry.
 - `pushAndSplitFees(tokens)` splits current FeeCenter balances equally across active receivers.
 - `removeReceiver(outputToken)` removes a receiver from future splits but leaves the receiver known/manageable for leftover cleanup.
-- Swaps go through whitelisted `IFeeSwapper` contracts only. Arbitrary aggregator calldata is not accepted by `FeeCenter`.
+- Swaps execute arbitrary calldata only against Safe-approved target contracts. The receiver grants that target an exact temporary input-token allowance, clears it after the call, and verifies actual input spent and output received against a nonzero minimum.
 - Receiver output tokens are notified into the Vault as claimable reward streams, or as compound streams when the receiver output token is the underlying APEX lock token.
 - `FeeCenter` intentionally also serves as the `IBeacon` for `FeeReceiver` `BeaconProxy` instances to avoid an extra deployment contract. The final `implementation()` view in `FeeCenter` is beacon compatibility surface and must not be removed or repurposed during FeeCenter upgrades. Regression tests verify existing receivers still resolve after a FeeCenter implementation upgrade.
+
+### Launcher creator fees
+
+- `DEFAULT_ADMIN_ROLE` defines generic launcher agreements by ID with a fixed recipient, gross creator-fee bps, and active flag, then separately authorizes caller contracts for Classic creation, CL creation, or both. Authorized callers cannot choose the recipient or percentage.
+- Launcher entrypoints create only new pools through the controller's configured canonical Classic or CL factory. Existing pools cannot be registered retroactively. CL creation also initializes the starting price in the same transaction.
+- Agreement terms are snapshotted per pool in `FeeCenter`; later agreement edits affect future pools only. Different launchers can therefore retain independent recipients and rates concurrently.
+- Creator fees are a percentage of gross swap fees, paid in both pool tokens out of the protocol-fee portion. The creator rate cannot exceed either token's active protocol share. At the default ungauged 20% protocol share, a 5% creator agreement leaves 15% of gross fees for normal FeeCenter routing and 80% for LPs. At the gauged 100% protocol share, it leaves 95% for FeeCenter and 0% for LP swap-fee accrual under the existing farm policy.
+- Classic protocol fees still crystallize lazily as LP tokens. Permissionless creator-pool collection mints pending fee LP, burns FeeCenter-held fee LP into both underlying tokens, pays the snapshotted creator, and leaves the remainder in FeeCenter. CL collection sends the factory-collected protocol amounts to FeeCenter, pays the creator proportionally, and leaves the remainder in FeeCenter.
+- Creator-pool recipients are fixed by stored configuration; permissionless collectors cannot redirect payment. Classic creator pools cannot redirect their fee receiver away from FeeCenter.
+- Fee/protocol-fee overrides, farm activation/deactivation, and creator-term rotation settle accrued creator fees under the old regime before changing it. Creator configuration survives farm activation and deactivation.
+- Upgrade storage additions are append-only inside the existing `apex.controller.storage.v1` and `apex.fee.center.storage.v1` namespaces: two controller mappings and one FeeCenter mapping. Existing field order and types are unchanged.
 
 ## Finding Disposition
 
@@ -311,13 +322,13 @@ Finding: `ApexVault.onERC721Received` accepts veNFT safe transfers from the conf
 
 Dev response: Accepted. Direct veNFT transfers to the Vault are unsupported user error, like sending tokens or NFTs to the wrong address. Official frontend/SDK flows must use `stake(...)`, which records the position before transferring the veNFT. The Vault is upgradeable if governance ever chooses to add a rescue path.
 
-### F-24: Raw router calls can strand unnecessary ETH or WETH
+### F-24: Public periphery cleanup inherits the upstream token-trust model
 
-Severity: Low / inherited Pancake-style periphery behavior.
+Severity: Low / inherited Pancake/Uniswap periphery behavior.
 
-Finding: `SwapRouter` and `SmartRouter` expose payable swap functions plus public `refundETH`, `unwrapWETH9`, and `sweepToken` helpers. A raw caller that sends unnecessary ETH, or constructs a multihop WETH path badly, can leave ETH/WETH in the router for public cleanup.
+Finding: `SwapRouter` and `SmartRouter` expose payable swap functions plus public `refundETH`, `unwrapWETH9`, and `sweepToken` helpers. A raw caller that sends unnecessary ETH, or constructs a multihop WETH path badly, can leave ETH/WETH in the router for public cleanup. A deliberately malicious output-token contract can also call `refundETH` while the CL pool transfers output before its payment callback; for a native-WETH input, that can consume the in-flight ETH and make `pay` fall back to the caller's existing WETH allowance.
 
-Dev response: Accepted as user/integration error. This matches the Pancake/Uniswap periphery model where raw router calls are composable and public cleanup helpers sweep full router balances. Official frontend/SDK paths should use `ApexSmartRouter.*CallParameters(...)` or `ApexSmartRouter.swapCallParameters(...)`, which always wrap swaps in a deadline/previous-blockhash `multicall` and support appending `REFUND_ETH`, `UNWRAP_WETH9`, or `SWEEP_TOKEN` cleanup calls in the same transaction when ETH/WETH leftovers are possible.
+Dev response: Accepted as inherited behavior under the normal-token assumption. The pinned Pancake V3 and Uniswap V3 implementations use the same output-before-callback sequence and the same full-balance `refundETH` / native-WETH `pay` logic. Apex does not claim safe routing through adversarial token contracts; official token lists and frontend/SDK routes must exclude malicious or otherwise unsupported tokens. For normal assets, official paths use `ApexSmartRouter.*CallParameters(...)` or `ApexSmartRouter.swapCallParameters(...)`, which wrap swaps in a deadline/previous-blockhash `multicall` and append `REFUND_ETH`, `UNWRAP_WETH9`, or `SWEEP_TOKEN` cleanup when leftovers are possible.
 
 ### F-25: mintAndStake recipient can strand staked CL NFTs
 
@@ -446,6 +457,22 @@ Severity: Informational / accepted rounding behavior.
 Finding: `ApexController.rewardLiability` is tracked in whole APEX units while controller emission rates and downstream Chef accounting floor intermediate divisions. After a fully elapsed emission window, a few raw APEX units can remain reserved as liability even when no meaningful reward remains claimable.
 
 Dev response: Accepted. Rounding moves in the conservative direction: rewards never exceed funded emissions, and any residual stays backed in the controller rather than overpaying users. Fuzz tests cover full-window Classic and CL emissions across arbitrary amount/duration inputs and bound residual liability to at most 2 raw APEX units in those single-pool cases. Apex intentionally avoids a broad dust sweep because proving no user-attributable rewards remain across all farms is more dangerous than leaving tiny backed dust.
+
+### F-41: Aggregator target must also be the documented allowance spender
+
+Severity: Medium / operational invariant.
+
+Finding: `FeeReceiver.executeSwap` grants an exact temporary allowance to the approved call target. Aggregator integrations are therefore valid only when the aggregator documents the same contract as both the ERC20 allowance spender and calldata entry point. In particular, 0x warns that approving its Settler can expose tokens to loss; only the AllowanceHolder endpoint may be used, and a quote must return the pinned AllowanceHolder as both the allowance spender and `transaction.to`. Kyber routes must likewise return the pinned MetaAggregationRouter as their router and allowance target.
+
+Dev response: Enforced in production tooling. Swap plans pin the router address and code hash, use the fee receiver as both sender and recipient, grant only the exact input amount inside the atomic call, and assert that allowance returns to zero. Tooling must reject any API response whose allowance spender and call target differ; it must never substitute a Settler or arbitrary calldata target.
+
+### F-42: Approved reward-token failure can delay unstaking
+
+Severity: Low / governed integration liveness assumption.
+
+Finding: `ApexVault.unstake` settles every configured reward before returning the veNFT. If an approved reward token later reverts on transfer because it is paused, blacklists the recipient, or otherwise stops behaving as an exact-transfer ERC20, the affected position cannot complete `unstake` through the current implementation.
+
+Dev response: Accepted under the governed reward-token trust model. Governance must approve only exact-transfer, non-rebasing tokens whose transfer policy cannot unexpectedly block recipients, as already required by the reward-token assumptions above. If an approved token nevertheless fails permanently, the transparent proxy provides the recovery path through a reviewed Vault upgrade; the protocol will not add a fail-open reward skip that could silently discard user value before launch.
 
 ## Audit Scope And Release Context
 

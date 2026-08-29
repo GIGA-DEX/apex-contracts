@@ -18,9 +18,11 @@ import {ApexVault} from "../src/core/ApexVault.sol";
 import {FeeCenter} from "../src/core/FeeCenter.sol";
 import {FeeReceiver} from "../src/core/FeeReceiver.sol";
 import {IApexController} from "../src/core/interfaces/IApexController.sol";
+import {IFeeCenter} from "../src/core/interfaces/IFeeCenter.sol";
 import {IVotingEscrow} from "../src/core/interfaces/IVotingEscrow.sol";
-import {IFeeSwapper} from "../src/core/interfaces/IFeeSwapper.sol";
 import {ApexErrors} from "../src/core/libraries/common/ApexErrors.sol";
+
+error MockSwapFailed();
 
 contract ApexEmissionMockERC20 is ERC20 {
     constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
@@ -76,21 +78,24 @@ contract ApexMockVeNFT is ERC721 {
     }
 }
 
-contract ApexMockSwapper is IFeeSwapper {
+contract ApexMockSwapper {
     uint256 public amountOut;
+    address public lastCaller;
+    bool public shouldRevert;
 
     function setAmountOut(uint256 _amountOut) external {
         amountOut = _amountOut;
     }
 
-    function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, address recipient)
-        external
-        returns (uint256 amountOut_)
-    {
-        amountOut_ = amountOut;
-        require(amountOut_ >= minAmountOut, "insufficient output");
+    function setShouldRevert(bool _shouldRevert) external {
+        shouldRevert = _shouldRevert;
+    }
+
+    function swap(address tokenIn, address tokenOut, uint256 amountIn, address recipient) external {
+        if (shouldRevert) revert MockSwapFailed();
+        lastCaller = msg.sender;
         require(ERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "transfer failed");
-        ApexEmissionMockERC20(tokenOut).mint(recipient, amountOut_);
+        ApexEmissionMockERC20(tokenOut).mint(recipient, amountOut);
     }
 }
 
@@ -173,6 +178,9 @@ contract ApexMockCLPool {
 
     address public lmPool;
     uint32 public feeProtocol;
+    uint160 public sqrtPriceX96;
+    uint128 public protocolFees0;
+    uint128 public protocolFees1;
 
     constructor(address factory_, address token0_, address token1_, uint24 fee_) {
         factory = factory_;
@@ -185,6 +193,32 @@ contract ApexMockCLPool {
         lmPool = lmPool_;
     }
 
+    function initialize(uint160 sqrtPriceX96_) external {
+        require(sqrtPriceX96 == 0, "AI");
+        require(sqrtPriceX96_ != 0, "SPL");
+        sqrtPriceX96 = sqrtPriceX96_;
+        feeProtocol = 1_000 + (1_000 << 16);
+    }
+
+    function seedProtocolFees(uint128 amount0, uint128 amount1) external {
+        protocolFees0 += amount0;
+        protocolFees1 += amount1;
+        if (amount0 != 0) ApexEmissionMockERC20(token0).mint(address(this), amount0);
+        if (amount1 != 0) ApexEmissionMockERC20(token1).mint(address(this), amount1);
+    }
+
+    function collectProtocol(address recipient, uint128 amount0Requested, uint128 amount1Requested)
+        external
+        returns (uint128 amount0, uint128 amount1)
+    {
+        amount0 = amount0Requested > protocolFees0 ? protocolFees0 : amount0Requested;
+        amount1 = amount1Requested > protocolFees1 ? protocolFees1 : amount1Requested;
+        protocolFees0 -= amount0;
+        protocolFees1 -= amount1;
+        if (amount0 != 0) require(ERC20(token0).transfer(recipient, amount0));
+        if (amount1 != 0) require(ERC20(token1).transfer(recipient, amount1));
+    }
+
     function setFeeProtocol(uint32 feeProtocol0_, uint32 feeProtocol1_) external {
         feeProtocol = feeProtocol0_ + (feeProtocol1_ << 16);
     }
@@ -193,7 +227,7 @@ contract ApexMockCLPool {
         external
         view
         returns (
-            uint160 sqrtPriceX96,
+            uint160 sqrtPriceX96_,
             int24 tick,
             uint16 observationIndex,
             uint16 observationCardinality,
@@ -219,6 +253,11 @@ contract ApexMockCLFeeFactory {
     address public owner;
     address public lmPoolDeployer;
 
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
+        _;
+    }
+
     function setOwner(address owner_) external {
         owner = owner_;
     }
@@ -228,12 +267,30 @@ contract ApexMockCLFeeFactory {
         getPool[token1][token0][fee] = pool;
     }
 
-    function setFeeProtocol(address pool, uint32 feeProtocol0, uint32 feeProtocol1) external {
+    function createPool(address tokenA, address tokenB, uint24 fee) external returns (address pool) {
+        require(tokenA != tokenB);
+        (address token0, address token1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
+        require(token0 != address(0));
+        require(getPool[token0][token1][fee] == address(0));
+        pool = address(new ApexMockCLPool(address(this), token0, token1, fee));
+        getPool[token0][token1][fee] = pool;
+        getPool[token1][token0][fee] = pool;
+    }
+
+    function setFeeProtocol(address pool, uint32 feeProtocol0, uint32 feeProtocol1) external onlyOwner {
         feeProtocols[pool] = FeeProtocol({token0: feeProtocol0, token1: feeProtocol1});
         ApexMockCLPool(pool).setFeeProtocol(feeProtocol0, feeProtocol1);
     }
 
-    function setLmPoolDeployer(address lmPoolDeployer_) external {
+    function collectProtocol(address pool, address recipient, uint128 amount0Requested, uint128 amount1Requested)
+        external
+        onlyOwner
+        returns (uint128 amount0, uint128 amount1)
+    {
+        return ApexMockCLPool(pool).collectProtocol(recipient, amount0Requested, amount1Requested);
+    }
+
+    function setLmPoolDeployer(address lmPoolDeployer_) external onlyOwner {
         lmPoolDeployer = lmPoolDeployer_;
     }
 
@@ -341,47 +398,219 @@ contract ApexControllerEmissionsTest is Test {
         controller.setClassicGlobalProtocolFee(200_000);
         vm.expectRevert();
         controller.setCLGlobalProtocolFee(2_000);
-        address[] memory classicPairs = new address[](1);
-        classicPairs[0] = classicPair;
-        address[] memory clPools = new address[](1);
-        clPools[0] = address(clPool);
-        vm.expectRevert();
-        controller.applyUngaugedProtocolFees(classicPairs, clPools);
         vm.stopPrank();
     }
 
-    function testFeeOperatorCanBatchApplyUngaugedProtocolFeePolicy() public {
-        controller.setClassicGlobalProtocolFee(250_000);
-        controller.setCLGlobalProtocolFee(3_000);
-        controller.overrideClassicProtocolFee(classicPair, 123_456);
-        controller.overrideCLProtocolFee(address(clPool), 4_000, 5_000);
+    function testLauncherAgreementCreatesAndSnapshotsClassicPoolCreatorFee() public {
+        bytes32 agreementId = keccak256("NTROPY");
+        address creator = address(0xC0FFEE);
+        ApexEmissionMockERC20 tokenC = new ApexEmissionMockERC20("Launcher Token", "LCH");
 
-        address[] memory classicPairs = new address[](1);
-        classicPairs[0] = classicPair;
-        address[] memory clPools = new address[](1);
-        clPools[0] = address(clPool);
-        controller.applyUngaugedProtocolFees(classicPairs, clPools);
+        controller.setLauncherAgreement(agreementId, creator, 500, true);
+        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CLASSIC());
 
-        assertEq(ClassicPool(classicPair).protocolFee(), 250_000);
-        (uint32 feeProtocol0, uint32 feeProtocol1) = clFactory.feeProtocols(address(clPool));
-        assertEq(feeProtocol0, 3_000);
-        assertEq(feeProtocol1, 3_000);
+        vm.prank(alice);
+        address pair = controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
+
+        assertEq(classicFactory.getPair(address(tokenA), address(tokenC), false), pair);
+        assertEq(ClassicPool(pair).feeReceiver(), address(feeCenter));
+        IFeeCenter.CreatorFeeConfig memory config = feeCenter.creatorFeeConfig(pair);
+        assertEq(config.recipient, creator);
+        assertEq(config.feeBps, 500);
+        assertEq(config.poolKind, uint8(IApexController.PoolKind.CLASSIC));
+
+        controller.setLauncherAgreement(agreementId, address(0xBEEF), 300, true);
+        config = feeCenter.creatorFeeConfig(pair);
+        assertEq(config.recipient, creator);
+        assertEq(config.feeBps, 500);
     }
 
-    function testUngaugedProtocolFeeApplicationRejectsActiveFarms() public {
-        address[] memory classicPairs = new address[](1);
-        classicPairs[0] = classicPair;
-        address[] memory noCLPools = new address[](0);
-        controller.activateClassicFarm(classicPair, 0);
-        vm.expectRevert(abi.encodeWithSelector(ApexErrors.FARM_ACTIVE.selector, classicPair));
-        controller.applyUngaugedProtocolFees(classicPairs, noCLPools);
+    function testLauncherClassicPoolRejectsUnauthorizedWrongKindAndExistingPool() public {
+        bytes32 agreementId = keccak256("NTROPY");
+        ApexEmissionMockERC20 tokenC = new ApexEmissionMockERC20("Launcher Token", "LCH");
+        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 500, true);
+        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CL());
 
-        address[] memory noClassicPairs = new address[](0);
-        address[] memory clPools = new address[](1);
-        clPools[0] = address(clPool);
-        controller.activateCLFarm(address(clPool), 0);
-        vm.expectRevert(abi.encodeWithSelector(ApexErrors.FARM_ACTIVE.selector, address(clPool)));
-        controller.applyUngaugedProtocolFees(noClassicPairs, clPools);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.NOT_AUTHORIZED.selector, alice));
+        controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
+
+        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CLASSIC());
+        vm.prank(alice);
+        controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
+
+        vm.prank(alice);
+        vm.expectRevert(ApexErrors.PAIR_EXISTS.selector);
+        controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
+
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.NOT_AUTHORIZED.selector, bob));
+        controller.createLauncherClassicPool(address(tokenA), address(tokenB), true);
+    }
+
+    function testLauncherConfigurationRequiresAdminAndActiveAgreement() public {
+        bytes32 agreementId = keccak256("NTROPY");
+        vm.prank(alice);
+        vm.expectRevert();
+        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 500, true);
+
+        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 500, false);
+        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CLASSIC());
+        ApexEmissionMockERC20 tokenC = new ApexEmissionMockERC20("Launcher Token", "LCH");
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.NOT_AUTHORIZED.selector, alice));
+        controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
+
+        vm.expectRevert(ApexErrors.FEE_TOO_HIGH.selector);
+        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 10_001, true);
+    }
+
+    function testPermissionlessClassicCreatorCollectionPaysFivePercentOfGrossFees() public {
+        bytes32 agreementId = keccak256("NTROPY");
+        address creator = address(0xC0FFEE);
+        ApexEmissionMockERC20 tokenC = new ApexEmissionMockERC20("Launcher Token", "LCH");
+        controller.setLauncherAgreement(agreementId, creator, 500, true);
+        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CLASSIC());
+        vm.prank(alice);
+        address pair = controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
+
+        _addLiquidity(pair, alice, 1_000 ether, 1_000 ether);
+        address tokenIn = ClassicPool(pair).token0();
+        ApexEmissionMockERC20(tokenIn).mint(pair, 100 ether);
+        uint256 amountOut = ClassicPool(pair).getAmountOut(100 ether, tokenIn);
+        if (tokenIn == ClassicPool(pair).token0()) {
+            ClassicPool(pair).swap(0, amountOut, bob, "");
+        } else {
+            ClassicPool(pair).swap(amountOut, 0, bob, "");
+        }
+
+        vm.prank(bob);
+        (uint256 amount0, uint256 amount1) = controller.collectLauncherClassicProtocolFees(pair);
+
+        assertEq(ApexEmissionMockERC20(ClassicPool(pair).token0()).balanceOf(creator), amount0 / 4);
+        assertEq(ApexEmissionMockERC20(ClassicPool(pair).token1()).balanceOf(creator), amount1 / 4);
+        assertEq(ClassicPool(pair).balanceOf(address(feeCenter)), 0);
+    }
+
+    function testClassicCreatorFeeSurvivesGaugeActivationAndDeactivation() public {
+        bytes32 agreementId = keccak256("NTROPY");
+        address creator = address(0xC0FFEE);
+        ApexEmissionMockERC20 tokenC = new ApexEmissionMockERC20("Launcher Token", "LCH");
+        controller.setLauncherAgreement(agreementId, creator, 500, true);
+        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CLASSIC());
+        vm.prank(alice);
+        address pair = controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
+        _addLiquidity(pair, alice, 1_000 ether, 1_000 ether);
+
+        controller.activateClassicFarm(pair, 1000);
+        assertEq(ClassicPool(pair).protocolFee(), 1_000_000);
+        address tokenIn = ClassicPool(pair).token0();
+        ApexEmissionMockERC20(tokenIn).mint(pair, 100 ether);
+        uint256 amountOut = ClassicPool(pair).getAmountOut(100 ether, tokenIn);
+        ClassicPool(pair).swap(0, amountOut, bob, "");
+
+        (uint256 amount0, uint256 amount1) = controller.collectLauncherClassicProtocolFees(pair);
+        assertEq(ApexEmissionMockERC20(ClassicPool(pair).token0()).balanceOf(creator), amount0 / 20);
+        assertEq(ApexEmissionMockERC20(ClassicPool(pair).token1()).balanceOf(creator), amount1 / 20);
+
+        controller.deactivateClassicFarm(pair);
+        assertEq(ClassicPool(pair).protocolFee(), 200_000);
+        assertEq(ClassicPool(pair).feeReceiver(), address(feeCenter));
+        assertEq(feeCenter.creatorFeeConfig(pair).recipient, creator);
+    }
+
+    function testLauncherAgreementCreatesAndInitializesCLPool() public {
+        bytes32 agreementId = keccak256("NTROPY");
+        address creator = address(0xC0FFEE);
+        controller.setLauncherAgreement(agreementId, creator, 500, true);
+        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CL());
+
+        vm.prank(alice);
+        address pool = controller.createLauncherCLPool(address(tokenA), address(feeToken), 3000, 1 << 96);
+
+        assertEq(clFactory.getPool(address(tokenA), address(feeToken), 3000), pool);
+        (uint32 feeProtocol0, uint32 feeProtocol1) = clFactory.feeProtocols(pool);
+        assertEq(feeProtocol0, 2_000);
+        assertEq(feeProtocol1, 2_000);
+        (uint160 sqrtPriceX96,,,,,,) = ApexMockCLPool(pool).slot0();
+        assertEq(sqrtPriceX96, 1 << 96);
+        IFeeCenter.CreatorFeeConfig memory config = feeCenter.creatorFeeConfig(pool);
+        assertEq(config.recipient, creator);
+        assertEq(config.feeBps, 500);
+        assertEq(config.poolKind, uint8(IApexController.PoolKind.CL));
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.POOL_EXISTS.selector, pool));
+        controller.createLauncherCLPool(address(tokenA), address(feeToken), 3000, 1 << 96);
+    }
+
+    function testPermissionlessCLCreatorCollectionPaysFivePercentOfGrossFeesAcrossGaugeTransition() public {
+        bytes32 agreementId = keccak256("NTROPY");
+        address creator = address(0xC0FFEE);
+        controller.setLauncherAgreement(agreementId, creator, 500, true);
+        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CL());
+        vm.prank(alice);
+        address poolAddress = controller.createLauncherCLPool(address(tokenA), address(feeToken), 3000, 1 << 96);
+        ApexMockCLPool pool = ApexMockCLPool(poolAddress);
+
+        pool.seedProtocolFees(20 ether, 40 ether);
+        controller.activateCLFarm(poolAddress, 1000);
+        assertEq(ApexEmissionMockERC20(pool.token0()).balanceOf(creator), 5 ether);
+        assertEq(ApexEmissionMockERC20(pool.token1()).balanceOf(creator), 10 ether);
+
+        pool.seedProtocolFees(100 ether, 200 ether);
+        vm.prank(bob);
+        controller.collectLauncherCLProtocolFees(poolAddress);
+        assertEq(ApexEmissionMockERC20(pool.token0()).balanceOf(creator), 10 ether);
+        assertEq(ApexEmissionMockERC20(pool.token1()).balanceOf(creator), 20 ether);
+
+        controller.deactivateCLFarm(poolAddress);
+        (uint32 feeProtocol0, uint32 feeProtocol1) = clFactory.feeProtocols(poolAddress);
+        assertEq(feeProtocol0, 2_000);
+        assertEq(feeProtocol1, 2_000);
+        assertEq(feeCenter.creatorFeeConfig(poolAddress).recipient, creator);
+    }
+
+    function testLauncherPoolCreatorFeeUpdateSettlesOldTermsBeforeRotating() public {
+        bytes32 agreementId = keccak256("NTROPY");
+        address oldCreator = address(0xC0FFEE);
+        address newCreator = address(0xCAFE);
+        controller.setLauncherAgreement(agreementId, oldCreator, 500, true);
+        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CL());
+        vm.prank(alice);
+        address poolAddress = controller.createLauncherCLPool(address(tokenA), address(feeToken), 3000, 1 << 96);
+        ApexMockCLPool pool = ApexMockCLPool(poolAddress);
+
+        pool.seedProtocolFees(20 ether, 40 ether);
+        controller.updateLauncherPoolCreatorFee(poolAddress, newCreator, 300);
+        assertEq(ApexEmissionMockERC20(pool.token0()).balanceOf(oldCreator), 5 ether);
+        assertEq(ApexEmissionMockERC20(pool.token1()).balanceOf(oldCreator), 10 ether);
+
+        pool.seedProtocolFees(20 ether, 40 ether);
+        controller.collectLauncherCLProtocolFees(poolAddress);
+        assertEq(ApexEmissionMockERC20(pool.token0()).balanceOf(newCreator), 3 ether);
+        assertEq(ApexEmissionMockERC20(pool.token1()).balanceOf(newCreator), 6 ether);
+    }
+
+    function testMultipleLaunchersKeepIndependentClassicAndCLCreatorFeeTerms() public {
+        bytes32 agreementA = keccak256("LAUNCHER_A");
+        bytes32 agreementB = keccak256("LAUNCHER_B");
+        address creatorA = address(0xC0FFEE);
+        address creatorB = address(0xBEEF);
+
+        controller.setLauncherAgreement(agreementA, creatorA, 500, true);
+        controller.setLauncherAgreement(agreementB, creatorB, 300, true);
+        controller.setLauncherCaller(
+            alice, agreementA, controller.LAUNCHER_PERMISSION_CLASSIC() | controller.LAUNCHER_PERMISSION_CL()
+        );
+        controller.setLauncherCaller(
+            bob, agreementB, controller.LAUNCHER_PERMISSION_CLASSIC() | controller.LAUNCHER_PERMISSION_CL()
+        );
+
+        _assertLauncherClassicSplit(alice, creatorA, 500, "Classic A", "CLA");
+        _assertLauncherClassicSplit(bob, creatorB, 300, "Classic B", "CLB");
+        _assertLauncherCLSplit(alice, creatorA, 500, "CL A", "CLA-CL");
+        _assertLauncherCLSplit(bob, creatorB, 300, "CL B", "CLB-CL");
     }
 
     function testFarmDeactivationRestoresConfiguredUngaugedProtocolFeePolicy() public {
@@ -1271,6 +1500,9 @@ contract ApexControllerEmissionsTest is Test {
         vm.expectRevert(abi.encodeWithSelector(ApexErrors.NOT_AUTHORIZED.selector, address(this)));
         feeCenter.addReceiver(address(feeToken));
 
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.NOT_AUTHORIZED.selector, address(this)));
+        feeCenter.setCreatorFeeConfig(classicPair, alice, 500, uint8(IApexController.PoolKind.CLASSIC));
+
         address receiver = controller.addFeeReceiver(address(feeToken));
         feeToken.mint(receiver, 1 ether);
 
@@ -1317,13 +1549,116 @@ contract ApexControllerEmissionsTest is Test {
         address receiver = controller.addFeeReceiver(address(feeToken));
         tokenA.mint(receiver, 100 ether);
 
-        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+        (uint256 spent, uint256 received) =
+            controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+
+        assertEq(spent, 100 ether);
+        assertEq(received, 90 ether);
+        assertEq(swapper.lastCaller(), receiver);
+        assertEq(tokenA.allowance(receiver, address(swapper)), 0);
+
         controller.notifyFeeReceiverVaultBalance(receiver);
 
         vm.warp(block.timestamp + 7 days);
 
         assertApproxEqAbs(vault.pendingReward(1, address(feeToken)), 90 ether, 1e15);
         assertEq(feeToken.balanceOf(address(vault)), 90 ether);
+    }
+
+    function testFeeReceiverSwapRejectsUnapprovedTarget() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.NOT_AUTHORIZED.selector, address(swapper)));
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+    }
+
+    function testFeeReceiverSwapRejectsCallerWithoutOperatorRole() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        swapper.setAmountOut(90 ether);
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+
+        vm.prank(alice);
+        vm.expectRevert();
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+    }
+
+    function testFeeReceiverSwapRejectsZeroMinimumOutput() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+
+        vm.expectRevert(ApexErrors.ZERO_AMOUNT.selector);
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 0, data);
+    }
+
+    function testFeeReceiverSwapRevertsWhenCalldataSendsOutputElsewhere() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        swapper.setAmountOut(90 ether);
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data = abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, bob));
+
+        vm.expectRevert(ApexErrors.INSUFFICIENT_OUTPUT_AMOUNT.selector);
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+
+        assertEq(tokenA.balanceOf(receiver), 100 ether);
+        assertEq(tokenA.balanceOf(address(swapper)), 0);
+        assertEq(feeToken.balanceOf(bob), 0);
+        assertEq(tokenA.allowance(receiver, address(swapper)), 0);
+    }
+
+    function testFeeReceiverSwapRevertsWhenOutputIsBelowMinimum() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        swapper.setAmountOut(89 ether);
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+
+        vm.expectRevert(ApexErrors.INSUFFICIENT_OUTPUT_AMOUNT.selector);
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+
+        assertEq(tokenA.balanceOf(receiver), 100 ether);
+        assertEq(feeToken.balanceOf(receiver), 0);
+        assertEq(tokenA.allowance(receiver, address(swapper)), 0);
+    }
+
+    function testFeeReceiverSwapBubblesTargetRevert() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        swapper.setShouldRevert(true);
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        tokenA.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(tokenA), address(feeToken), 100 ether, receiver));
+
+        vm.expectRevert(MockSwapFailed.selector);
+        controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
+
+        assertEq(tokenA.balanceOf(receiver), 100 ether);
+        assertEq(tokenA.allowance(receiver, address(swapper)), 0);
+    }
+
+    function testCannotWhitelistNonContractSwapper() public {
+        address nonContract = address(0xBEEF);
+
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.INVALID_TARGET.selector, nonContract));
+        controller.setFeeSwapper(nonContract, true);
     }
 
     function testApexVaultCompoundOnlyConfigStreamsAndRelocks() public {
@@ -2515,9 +2850,60 @@ contract ApexControllerEmissionsTest is Test {
         );
     }
 
+    function _assertLauncherClassicSplit(
+        address caller,
+        address creator,
+        uint16 creatorFeeBps,
+        string memory name,
+        string memory symbol
+    ) internal {
+        ApexEmissionMockERC20 pairedToken = new ApexEmissionMockERC20(name, symbol);
+        vm.prank(caller);
+        address pool = controller.createLauncherClassicPool(address(tokenA), address(pairedToken), false);
+        _addLiquidity(pool, caller, 1_000 ether, 1_000 ether);
+
+        address tokenIn = ClassicPool(pool).token0();
+        ApexEmissionMockERC20(tokenIn).mint(pool, 100 ether);
+        uint256 amountOut = ClassicPool(pool).getAmountOut(100 ether, tokenIn);
+        ClassicPool(pool).swap(0, amountOut, caller, "");
+        (uint256 amount0, uint256 amount1) = controller.collectLauncherClassicProtocolFees(pool);
+
+        assertEq(ApexEmissionMockERC20(ClassicPool(pool).token0()).balanceOf(creator), amount0 * creatorFeeBps / 2_000);
+        assertEq(ApexEmissionMockERC20(ClassicPool(pool).token1()).balanceOf(creator), amount1 * creatorFeeBps / 2_000);
+        IFeeCenter.CreatorFeeConfig memory config = feeCenter.creatorFeeConfig(pool);
+        assertEq(config.recipient, creator);
+        assertEq(config.feeBps, creatorFeeBps);
+    }
+
+    function _assertLauncherCLSplit(
+        address caller,
+        address creator,
+        uint16 creatorFeeBps,
+        string memory name,
+        string memory symbol
+    ) internal {
+        ApexEmissionMockERC20 pairedToken = new ApexEmissionMockERC20(name, symbol);
+        vm.prank(caller);
+        address pool = controller.createLauncherCLPool(address(feeToken), address(pairedToken), 100, 1 << 96);
+        ApexMockCLPool(pool).seedProtocolFees(20 ether, 40 ether);
+        controller.collectLauncherCLProtocolFees(pool);
+
+        assertEq(
+            ApexEmissionMockERC20(ApexMockCLPool(pool).token0()).balanceOf(creator),
+            20 ether * uint256(creatorFeeBps) / 2_000
+        );
+        assertEq(
+            ApexEmissionMockERC20(ApexMockCLPool(pool).token1()).balanceOf(creator),
+            40 ether * uint256(creatorFeeBps) / 2_000
+        );
+        IFeeCenter.CreatorFeeConfig memory config = feeCenter.creatorFeeConfig(pool);
+        assertEq(config.recipient, creator);
+        assertEq(config.feeBps, creatorFeeBps);
+    }
+
     function _addLiquidity(address pair, address to, uint256 amount0, uint256 amount1) internal {
-        tokenA.mint(pair, amount0);
-        tokenB.mint(pair, amount1);
+        ApexEmissionMockERC20(ClassicPool(pair).token0()).mint(pair, amount0);
+        ApexEmissionMockERC20(ClassicPool(pair).token1()).mint(pair, amount1);
         ClassicPool(pair).mint(to);
     }
 

@@ -46,8 +46,6 @@ interface IApexController {
 
     function clGlobalProtocolFee() external view returns (uint32);
 
-    function applyUngaugedProtocolFees(address[] calldata classicPairs, address[] calldata clPools) external;
-
     function setLmPoolDeployer(address lmPoolDeployer) external;
 
     function setCLMasterChefEmergency(bool emergency) external;
@@ -74,6 +72,29 @@ interface IApexController {
 
     function collectClassicProtocolFees(address pair) external returns (uint256 amount0, uint256 amount1);
 
+    function collectLauncherCLProtocolFees(address pool) external returns (uint128 amount0, uint128 amount1);
+
+    function collectLauncherClassicProtocolFees(address pair) external returns (uint256 amount0, uint256 amount1);
+
+    function setLauncherAgreement(bytes32 agreementId, address recipient, uint16 creatorFeeBps, bool active) external;
+
+    function setLauncherCaller(address caller, bytes32 agreementId, uint8 permissions) external;
+
+    function updateLauncherPoolCreatorFee(address pool, address recipient, uint16 creatorFeeBps) external;
+
+    function createLauncherClassicPool(address tokenA, address tokenB, bool stable) external returns (address pair);
+
+    function createLauncherCLPool(address tokenA, address tokenB, uint24 fee, uint160 sqrtPriceX96)
+        external
+        returns (address pool);
+
+    function launcherAgreement(bytes32 agreementId)
+        external
+        view
+        returns (address recipient, uint16 creatorFeeBps, bool active);
+
+    function launcherAuthorization(address caller) external view returns (bytes32 agreementId, uint8 permissions);
+
     function notifyVaultReward(address token, uint256 amount) external;
 
     function notifyVaultRewardFrom(address from, address token, uint256 amount) external;
@@ -99,9 +120,10 @@ interface IApexController {
     function executeFeeReceiverSwap(
         address receiver,
         address tokenIn,
-        address swapper,
+        address target,
         uint256 amount,
-        uint256 minAmountOut
+        uint256 minAmountOut,
+        bytes calldata data
     ) external returns (uint256 spent, uint256 received);
 
     function notifyFeeReceiverVault(address receiver, uint256 amount) external;

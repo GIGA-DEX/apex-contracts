@@ -15,6 +15,17 @@ library ApexControllerStorage {
 
     bytes32 internal constant SLOT = keccak256("apex.controller.storage.v1");
 
+    struct LauncherAgreement {
+        address recipient;
+        uint16 creatorFeeBps;
+        bool active;
+    }
+
+    struct LauncherAuthorization {
+        bytes32 agreementId;
+        uint8 permissions;
+    }
+
     struct Layout {
         IERC20 rewardToken;
         IClassicFactory classicFactory;
@@ -37,6 +48,8 @@ library ApexControllerStorage {
         IFeeCenter feeCenter;
         address emissionCenter;
         uint32 clGlobalProtocolFeePlusOne;
+        mapping(bytes32 agreementId => LauncherAgreement agreement) launcherAgreements;
+        mapping(address caller => LauncherAuthorization authorization) launcherAuthorizations;
     }
 
     function layout() internal pure returns (Layout storage s) {

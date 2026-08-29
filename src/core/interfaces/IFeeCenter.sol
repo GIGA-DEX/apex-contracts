@@ -2,6 +2,12 @@
 pragma solidity ^0.8.20;
 
 interface IFeeCenter {
+    struct CreatorFeeConfig {
+        address recipient;
+        uint16 feeBps;
+        uint8 poolKind;
+    }
+
     function apexController() external view returns (address);
 
     function vault() external view returns (address);
@@ -18,12 +24,25 @@ interface IFeeCenter {
 
     function realizeClassicFees(address _pair) external returns (uint256 amount0, uint256 amount1);
 
+    function setCreatorFeeConfig(address pool, address recipient, uint16 feeBps, uint8 poolKind) external;
+
+    function distributeCLCreatorFees(
+        address pool,
+        uint128 amount0,
+        uint128 amount1,
+        uint32 feeProtocol0,
+        uint32 feeProtocol1
+    ) external returns (uint256 creatorAmount0, uint256 creatorAmount1);
+
+    function creatorFeeConfig(address pool) external view returns (CreatorFeeConfig memory config);
+
     function executeReceiverSwap(
         address _receiver,
         address _tokenIn,
-        address _swapper,
+        address _target,
         uint256 _amount,
-        uint256 _minAmountOut
+        uint256 _minAmountOut,
+        bytes calldata _data
     ) external returns (uint256 spent, uint256 received);
 
     function notifyReceiverVault(address _receiver, uint256 _amount) external;
