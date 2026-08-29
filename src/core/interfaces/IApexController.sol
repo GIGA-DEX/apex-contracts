@@ -24,6 +24,14 @@ interface IApexController {
         CL
     }
 
+    /// @notice Pool types an authorized launcher caller may create.
+    enum LauncherPermission {
+        NONE,
+        CLASSIC,
+        CL,
+        BOTH
+    }
+
     struct EmissionWeight {
         PoolKind kind;
         address pool;
@@ -76,11 +84,23 @@ interface IApexController {
 
     function collectLauncherClassicProtocolFees(address pair) external returns (uint256 amount0, uint256 amount1);
 
-    function setLauncherAgreement(bytes32 agreementId, address recipient, uint16 creatorFeeBps, bool active) external;
+    /// @notice Sets terms used by pools created after this call.
+    /// @param veGigaFeeBps Base veGIGA share while ungauged; LPs receive the remaining gross-fee share.
+    /// @param startGauged If true, creation registers the farm at zero emission weight and gives LPs zero swap fees.
+    function setLauncherAgreement(
+        bytes32 agreementId,
+        address recipient,
+        uint16 creatorFeeBps,
+        uint16 veGigaFeeBps,
+        bool startGauged,
+        bool active
+    ) external;
 
-    function setLauncherCaller(address caller, bytes32 agreementId, uint8 permissions) external;
+    function setLauncherCaller(address caller, bytes32 agreementId, LauncherPermission permission) external;
 
-    function updateLauncherPoolCreatorFee(address pool, address recipient, uint16 creatorFeeBps) external;
+    /// @notice Settles existing fees, then updates a launcher's per-pool creator and base veGIGA split.
+    function updateLauncherPoolFeeSplit(address pool, address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps)
+        external;
 
     function createLauncherClassicPool(address tokenA, address tokenB, bool stable) external returns (address pair);
 
@@ -91,9 +111,37 @@ interface IApexController {
     function launcherAgreement(bytes32 agreementId)
         external
         view
-        returns (address recipient, uint16 creatorFeeBps, bool active);
+        returns (address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps, bool startGauged, bool active);
 
-    function launcherAuthorization(address caller) external view returns (bytes32 agreementId, uint8 permissions);
+    function launcherAuthorization(address caller)
+        external
+        view
+        returns (bytes32 agreementId, LauncherPermission permission);
+
+    function launcherPoolConfig(address pool)
+        external
+        view
+        returns (
+            bytes32 agreementId,
+            address launcher,
+            address recipient,
+            uint16 creatorFeeBps,
+            uint16 veGigaFeeBps,
+            PoolKind poolKind,
+            bool gauged
+        );
+
+    function launcherAgreementIds(bool activeOnly) external view returns (bytes32[] memory);
+
+    function launcherCallers() external view returns (address[] memory);
+
+    function launcherPools() external view returns (address[] memory);
+
+    function activeLauncherPools() external view returns (address[] memory);
+
+    function launcherPoolsByAgreement(bytes32 agreementId) external view returns (address[] memory);
+
+    function launcherPoolsByCaller(address caller) external view returns (address[] memory);
 
     function notifyVaultReward(address token, uint256 amount) external;
 

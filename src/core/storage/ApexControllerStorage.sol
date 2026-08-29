@@ -12,6 +12,7 @@ import {IApexVault} from "../interfaces/IApexVault.sol";
 
 library ApexControllerStorage {
     using EnumerableSet for EnumerableSet.AddressSet;
+    using EnumerableSet for EnumerableSet.Bytes32Set;
 
     bytes32 internal constant SLOT = keccak256("apex.controller.storage.v1");
 
@@ -19,11 +20,21 @@ library ApexControllerStorage {
         address recipient;
         uint16 creatorFeeBps;
         bool active;
+        uint16 veGigaFeeBps;
+        bool startGauged;
     }
 
     struct LauncherAuthorization {
         bytes32 agreementId;
         uint8 permissions;
+    }
+
+    struct LauncherPoolConfig {
+        bytes32 agreementId;
+        address launcher;
+        uint16 veGigaFeeBps;
+        uint8 poolKind;
+        bool exists;
     }
 
     struct Layout {
@@ -50,6 +61,14 @@ library ApexControllerStorage {
         uint32 clGlobalProtocolFeePlusOne;
         mapping(bytes32 agreementId => LauncherAgreement agreement) launcherAgreements;
         mapping(address caller => LauncherAuthorization authorization) launcherAuthorizations;
+        EnumerableSet.Bytes32Set launcherAgreementIds;
+        EnumerableSet.Bytes32Set activeLauncherAgreementIds;
+        EnumerableSet.AddressSet launcherCallers;
+        EnumerableSet.AddressSet launcherPools;
+        EnumerableSet.AddressSet activeLauncherPools;
+        mapping(bytes32 agreementId => EnumerableSet.AddressSet pools) launcherPoolsByAgreement;
+        mapping(address caller => EnumerableSet.AddressSet pools) launcherPoolsByCaller;
+        mapping(address pool => LauncherPoolConfig config) launcherPoolConfigs;
     }
 
     function layout() internal pure returns (Layout storage s) {

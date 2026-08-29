@@ -203,8 +203,8 @@ contract CLFactoryTest is Test {
             _deployControllerAndFactory(address(this), address(0xA9E7));
         bytes32 agreementId = keccak256("NTROPY");
         address recipient = address(0xC0FFEE);
-        controller.setLauncherAgreement(agreementId, recipient, 500, true);
-        controller.setLauncherCaller(address(this), agreementId, controller.LAUNCHER_PERMISSION_CL());
+        controller.setLauncherAgreement(agreementId, recipient, 500, 1_500, false, true);
+        controller.setLauncherCaller(address(this), agreementId, IApexController.LauncherPermission.CL);
 
         address pool = controller.createLauncherCLPool(tokenA, tokenB, 3000, SQRT_PRICE_1_1);
 

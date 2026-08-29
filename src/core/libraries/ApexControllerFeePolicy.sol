@@ -10,16 +10,14 @@ import {ICLPool} from "../interfaces/ICLPool.sol";
 import {IClassicChef} from "../interfaces/IClassicChef.sol";
 import {ICLMasterChef} from "../interfaces/ICLMasterChef.sol";
 import {IFeeCenter} from "../interfaces/IFeeCenter.sol";
+import {IApexController} from "../interfaces/IApexController.sol";
 import {ApexErrors} from "./common/ApexErrors.sol";
 import {ApexControllerStorage} from "../storage/ApexControllerStorage.sol";
 
 library ApexControllerFeePolicy {
     using EnumerableSet for EnumerableSet.AddressSet;
+    using EnumerableSet for EnumerableSet.Bytes32Set;
 
-    uint8 internal constant LAUNCHER_PERMISSION_CLASSIC = 1;
-    uint8 internal constant LAUNCHER_PERMISSION_CL = 2;
-    uint8 private constant POOL_KIND_CLASSIC = 0;
-    uint8 private constant POOL_KIND_CL = 1;
     uint16 private constant BPS = 10_000;
     uint256 private constant CLASSIC_PROTOCOL_FEE_BPS_SCALE = 100;
     uint256 private constant CLASSIC_FARM_PROTOCOL_FEE = 1_000_000;
@@ -31,16 +29,28 @@ library ApexControllerFeePolicy {
     event EmissionCenterSet(address indexed center);
     event TreasurySet(address indexed previousTreasury, address indexed newTreasury);
     event LauncherAgreementSet(
-        bytes32 indexed agreementId, address indexed recipient, uint16 creatorFeeBps, bool active
+        bytes32 indexed agreementId,
+        address indexed recipient,
+        uint16 creatorFeeBps,
+        uint16 veGigaFeeBps,
+        bool startGauged,
+        bool active
     );
-    event LauncherCallerSet(address indexed caller, bytes32 indexed agreementId, uint8 permissions);
+    event LauncherCallerSet(
+        address indexed caller, bytes32 indexed agreementId, IApexController.LauncherPermission permission
+    );
     event LauncherPoolCreated(
         bytes32 indexed agreementId,
         address indexed launcher,
         address indexed pool,
-        uint8 poolKind,
+        IApexController.PoolKind poolKind,
         address recipient,
-        uint16 creatorFeeBps
+        uint16 creatorFeeBps,
+        uint16 veGigaFeeBps,
+        bool gauged
+    );
+    event LauncherPoolFeeSplitSet(
+        address indexed pool, address indexed recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps
     );
     event ClassicFarmRegistered(address indexed pair);
     event ClassicFarmActivated(address indexed pair, uint256 allocPoint, address indexed feeReceiver);
@@ -49,50 +59,68 @@ library ApexControllerFeePolicy {
     event CLFarmActivated(address indexed clFactory, address indexed pool, uint256 allocPoint);
     event CLFarmDeactivated(address indexed clFactory, address indexed pool);
 
-    function setLauncherAgreement(bytes32 agreementId, address recipient, uint16 creatorFeeBps, bool active) external {
+    function setLauncherAgreement(
+        bytes32 agreementId,
+        address recipient,
+        uint16 creatorFeeBps,
+        uint16 veGigaFeeBps,
+        bool startGauged,
+        bool active
+    ) external {
         require(agreementId != bytes32(0), ApexErrors.INVALID_ASSORTMENT());
-        require(recipient != address(0), ApexErrors.ZERO_ADDRESS());
-        require(creatorFeeBps != 0, ApexErrors.ZERO_FEE());
-        require(creatorFeeBps <= BPS, ApexErrors.FEE_TOO_HIGH());
-        ApexControllerStorage.layout().launcherAgreements[agreementId] = ApexControllerStorage.LauncherAgreement({
-            recipient: recipient, creatorFeeBps: creatorFeeBps, active: active
+        _validateFeeSplit(recipient, creatorFeeBps, veGigaFeeBps);
+        ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
+        s.launcherAgreementIds.add(agreementId);
+        if (active) s.activeLauncherAgreementIds.add(agreementId);
+        else s.activeLauncherAgreementIds.remove(agreementId);
+        s.launcherAgreements[agreementId] = ApexControllerStorage.LauncherAgreement({
+            recipient: recipient,
+            creatorFeeBps: creatorFeeBps,
+            active: active,
+            veGigaFeeBps: veGigaFeeBps,
+            startGauged: startGauged
         });
-        emit LauncherAgreementSet(agreementId, recipient, creatorFeeBps, active);
+        emit LauncherAgreementSet(agreementId, recipient, creatorFeeBps, veGigaFeeBps, startGauged, active);
     }
 
-    function setLauncherCaller(address caller, bytes32 agreementId, uint8 permissions) external {
+    function setLauncherCaller(address caller, bytes32 agreementId, IApexController.LauncherPermission permission)
+        external
+    {
         require(caller != address(0), ApexErrors.ZERO_ADDRESS());
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        if (permissions == 0) {
+        if (permission == IApexController.LauncherPermission.NONE) {
             delete s.launcherAuthorizations[caller];
-            emit LauncherCallerSet(caller, bytes32(0), 0);
+            s.launcherCallers.remove(caller);
+            emit LauncherCallerSet(caller, bytes32(0), permission);
             return;
         }
-        require(
-            permissions & ~(LAUNCHER_PERMISSION_CLASSIC | LAUNCHER_PERMISSION_CL) == 0, ApexErrors.INVALID_ASSORTMENT()
-        );
-        require(s.launcherAgreements[agreementId].recipient != address(0), ApexErrors.INVALID_ASSORTMENT());
+        require(s.launcherAgreementIds.contains(agreementId), ApexErrors.INVALID_ASSORTMENT());
         s.launcherAuthorizations[caller] =
-            ApexControllerStorage.LauncherAuthorization({agreementId: agreementId, permissions: permissions});
-        emit LauncherCallerSet(caller, agreementId, permissions);
+            ApexControllerStorage.LauncherAuthorization({agreementId: agreementId, permissions: uint8(permission)});
+        s.launcherCallers.add(caller);
+        emit LauncherCallerSet(caller, agreementId, permission);
     }
 
     function createLauncherClassicPool(address tokenA, address tokenB, bool stable) external returns (address pair) {
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
         (bytes32 agreementId, ApexControllerStorage.LauncherAgreement memory agreement) =
-            _launcherAgreement(s, LAUNCHER_PERMISSION_CLASSIC);
+            _launcherAgreement(s, IApexController.LauncherPermission.CLASSIC);
         IClassicFactory factory = s.classicFactory;
         require(factory.getPair(tokenA, tokenB, stable) == address(0), ApexErrors.PAIR_EXISTS());
         pair = factory.createPair(tokenA, tokenB, stable);
 
-        uint256 minimumProtocolFee = uint256(agreement.creatorFeeBps) * CLASSIC_PROTOCOL_FEE_BPS_SCALE;
-        if (IClassicPool(pair).protocolFee() < minimumProtocolFee) {
-            factory.setPairProtocolFee(pair, minimumProtocolFee);
-        }
-        factory.setPairFeeReceiver(pair, address(s.feeCenter));
-        s.feeCenter.setCreatorFeeConfig(pair, agreement.recipient, agreement.creatorFeeBps, POOL_KIND_CLASSIC);
+        _registerLauncherPool(s, agreementId, pair, IApexController.PoolKind.CLASSIC, agreement);
+        if (agreement.startGauged) _activateClassicFarm(s, pair, 0);
+        else _applyLauncherBaseFee(s, pair);
         emit LauncherPoolCreated(
-            agreementId, msg.sender, pair, POOL_KIND_CLASSIC, agreement.recipient, agreement.creatorFeeBps
+            agreementId,
+            msg.sender,
+            pair,
+            IApexController.PoolKind.CLASSIC,
+            agreement.recipient,
+            agreement.creatorFeeBps,
+            agreement.veGigaFeeBps,
+            agreement.startGauged
         );
     }
 
@@ -102,19 +130,25 @@ library ApexControllerFeePolicy {
     {
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
         (bytes32 agreementId, ApexControllerStorage.LauncherAgreement memory agreement) =
-            _launcherAgreement(s, LAUNCHER_PERMISSION_CL);
+            _launcherAgreement(s, IApexController.LauncherPermission.CL);
         ICLFactory factory = s.clFactory;
         address existingPool = factory.getPool(tokenA, tokenB, fee);
         require(existingPool == address(0), ApexErrors.POOL_EXISTS(existingPool));
         pool = factory.createPool(tokenA, tokenB, fee);
         ICLPool(pool).initialize(sqrtPriceX96);
 
-        uint32 protocolFee = _clGlobalProtocolFee(s);
-        if (protocolFee < agreement.creatorFeeBps) protocolFee = agreement.creatorFeeBps;
-        factory.setFeeProtocol(pool, protocolFee, protocolFee);
-        s.feeCenter.setCreatorFeeConfig(pool, agreement.recipient, agreement.creatorFeeBps, POOL_KIND_CL);
+        _registerLauncherPool(s, agreementId, pool, IApexController.PoolKind.CL, agreement);
+        if (agreement.startGauged) _activateCLFarm(s, pool, 0);
+        else _applyLauncherBaseFee(s, pool);
         emit LauncherPoolCreated(
-            agreementId, msg.sender, pool, POOL_KIND_CL, agreement.recipient, agreement.creatorFeeBps
+            agreementId,
+            msg.sender,
+            pool,
+            IApexController.PoolKind.CL,
+            agreement.recipient,
+            agreement.creatorFeeBps,
+            agreement.veGigaFeeBps,
+            agreement.startGauged
         );
     }
 
@@ -153,8 +187,7 @@ library ApexControllerFeePolicy {
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
         IClassicFactory factory = s.classicFactory;
         require(factory.isPair(pair), ApexErrors.NOT_PAIR(pair));
-        IFeeCenter.CreatorFeeConfig memory config = s.feeCenter.creatorFeeConfig(pair);
-        if (config.recipient != address(0)) {
+        if (s.launcherPoolConfigs[pair].exists) {
             require(feeReceiver == address(s.feeCenter), ApexErrors.INVALID_TARGET(feeReceiver));
         }
         factory.setPairFeeReceiver(pair, feeReceiver);
@@ -171,12 +204,18 @@ library ApexControllerFeePolicy {
         IClassicFactory factory = s.classicFactory;
         require(factory.isPair(pair), ApexErrors.NOT_PAIR(pair));
         IFeeCenter.CreatorFeeConfig memory config = s.feeCenter.creatorFeeConfig(pair);
-        if (config.recipient != address(0)) {
+        ApexControllerStorage.LauncherPoolConfig storage poolConfig = s.launcherPoolConfigs[pair];
+        if (poolConfig.exists) {
             _collectClassicProtocolFees(s, pair);
-            require(
-                protocolFee >= uint256(config.feeBps) * CLASSIC_PROTOCOL_FEE_BPS_SCALE,
-                ApexErrors.INVALID_PROTOCOL_FEE()
-            );
+            require(protocolFee % CLASSIC_PROTOCOL_FEE_BPS_SCALE == 0, ApexErrors.INVALID_PROTOCOL_FEE());
+            uint256 protocolFeeBps = protocolFee / CLASSIC_PROTOCOL_FEE_BPS_SCALE;
+            require(protocolFeeBps >= config.feeBps && protocolFeeBps <= BPS, ApexErrors.INVALID_PROTOCOL_FEE());
+            if (s.activeFarm[pair]) {
+                require(protocolFeeBps == BPS, ApexErrors.INVALID_PROTOCOL_FEE());
+            } else {
+                poolConfig.veGigaFeeBps = uint16(protocolFeeBps - config.feeBps);
+                emit LauncherPoolFeeSplitSet(pair, config.recipient, config.feeBps, poolConfig.veGigaFeeBps);
+            }
         }
         factory.setPairProtocolFee(pair, protocolFee);
     }
@@ -185,9 +224,19 @@ library ApexControllerFeePolicy {
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
         ICLFactory factory = _canonicalCLFactory(s, pool);
         IFeeCenter.CreatorFeeConfig memory config = s.feeCenter.creatorFeeConfig(pool);
-        if (config.recipient != address(0)) {
+        ApexControllerStorage.LauncherPoolConfig storage poolConfig = s.launcherPoolConfigs[pool];
+        if (poolConfig.exists) {
             _collectCLProtocolFees(s, factory, pool, type(uint128).max, type(uint128).max);
-            require(feeProtocol0 >= config.feeBps && feeProtocol1 >= config.feeBps, ApexErrors.INVALID_PROTOCOL_FEE());
+            require(
+                feeProtocol0 == feeProtocol1 && feeProtocol0 >= config.feeBps && feeProtocol0 <= BPS,
+                ApexErrors.INVALID_PROTOCOL_FEE()
+            );
+            if (s.activeFarm[pool]) {
+                require(feeProtocol0 == BPS, ApexErrors.INVALID_PROTOCOL_FEE());
+            } else {
+                poolConfig.veGigaFeeBps = uint16(feeProtocol0 - config.feeBps);
+                emit LauncherPoolFeeSplitSet(pool, config.recipient, config.feeBps, poolConfig.veGigaFeeBps);
+            }
         }
         factory.setFeeProtocol(pool, feeProtocol0, feeProtocol1);
     }
@@ -208,72 +257,44 @@ library ApexControllerFeePolicy {
 
     function collectLauncherCLProtocolFees(address pool) external returns (uint128 amount0, uint128 amount1) {
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        require(s.feeCenter.creatorFeeConfig(pool).recipient != address(0), ApexErrors.INVALID_POOL(pool));
+        require(s.launcherPoolConfigs[pool].exists, ApexErrors.INVALID_POOL(pool));
         return _collectCLProtocolFees(s, _canonicalCLFactory(s, pool), pool, type(uint128).max, type(uint128).max);
     }
 
     function collectLauncherClassicProtocolFees(address pair) external returns (uint256 amount0, uint256 amount1) {
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
         require(s.classicFactory.isPair(pair), ApexErrors.NOT_PAIR(pair));
-        require(s.feeCenter.creatorFeeConfig(pair).recipient != address(0), ApexErrors.INVALID_POOL(pair));
+        require(s.launcherPoolConfigs[pair].exists, ApexErrors.INVALID_POOL(pair));
         return _collectClassicProtocolFees(s, pair);
     }
 
-    function updateLauncherPoolCreatorFee(address pool, address recipient, uint16 creatorFeeBps) external {
-        require(recipient != address(0), ApexErrors.ZERO_ADDRESS());
-        require(creatorFeeBps != 0, ApexErrors.ZERO_FEE());
-        require(creatorFeeBps <= BPS, ApexErrors.FEE_TOO_HIGH());
+    function updateLauncherPoolFeeSplit(address pool, address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps)
+        external
+    {
+        _validateFeeSplit(recipient, creatorFeeBps, veGigaFeeBps);
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        IFeeCenter.CreatorFeeConfig memory config = s.feeCenter.creatorFeeConfig(pool);
-        require(config.recipient != address(0), ApexErrors.INVALID_POOL(pool));
+        ApexControllerStorage.LauncherPoolConfig storage poolConfig = s.launcherPoolConfigs[pool];
+        require(poolConfig.exists, ApexErrors.INVALID_POOL(pool));
 
-        if (config.poolKind == POOL_KIND_CLASSIC) {
+        if (poolConfig.poolKind == uint8(IApexController.PoolKind.CLASSIC)) {
             require(s.classicFactory.isPair(pool), ApexErrors.NOT_PAIR(pool));
             _collectClassicProtocolFees(s, pool);
-            require(
-                IClassicPool(pool).protocolFee() >= uint256(creatorFeeBps) * CLASSIC_PROTOCOL_FEE_BPS_SCALE,
-                ApexErrors.INVALID_PROTOCOL_FEE()
-            );
         } else {
             ICLFactory factory = _canonicalCLFactory(s, pool);
             _collectCLProtocolFees(s, factory, pool, type(uint128).max, type(uint128).max);
-            (,,,,, uint32 feeProtocol,) = ICLPool(pool).slot0();
-            require(
-                feeProtocol % 65_536 >= creatorFeeBps && feeProtocol >> 16 >= creatorFeeBps,
-                ApexErrors.INVALID_PROTOCOL_FEE()
-            );
         }
-        s.feeCenter.setCreatorFeeConfig(pool, recipient, creatorFeeBps, config.poolKind);
+        poolConfig.veGigaFeeBps = veGigaFeeBps;
+        s.feeCenter.setCreatorFeeConfig(pool, recipient, creatorFeeBps, poolConfig.poolKind);
+        if (!s.activeFarm[pool]) _applyLauncherBaseFee(s, pool);
+        emit LauncherPoolFeeSplitSet(pool, recipient, creatorFeeBps, veGigaFeeBps);
+    }
+
+    function registerClassicFarm(address pair) external {
+        _registerClassicFarm(ApexControllerStorage.layout(), pair);
     }
 
     function activateClassicFarm(address pair, uint256 allocPoint) external {
-        ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        IClassicChef classicChef = s.classicChef;
-        IClassicFactory factory = s.classicFactory;
-        address feeReceiver = address(s.feeCenter);
-        require(address(classicChef) != address(0) && feeReceiver != address(0), ApexErrors.ZERO_ADDRESS());
-
-        if (!s.registeredFarm[pair]) {
-            require(factory.isPair(pair), ApexErrors.NOT_PAIR(pair));
-            classicChef.addPool(pair, 0);
-            s.registeredFarm[pair] = true;
-            s.classicFarms.add(pair);
-            emit ClassicFarmRegistered(pair);
-        }
-        require(allocPoint != 0 || !s.activeFarm[pair], ApexErrors.ZERO_AMOUNT());
-        classicChef.massUpdatePools();
-        s.clMasterChef.massUpdatePools();
-        classicChef.setPoolAllocPoint(pair, allocPoint);
-        s.totalAllocPoint = s.totalAllocPoint - s.farmAllocPoint[pair] + allocPoint;
-        s.farmAllocPoint[pair] = allocPoint;
-
-        if (s.feeCenter.creatorFeeConfig(pair).recipient != address(0)) {
-            _collectClassicProtocolFees(s, pair);
-        }
-        factory.setPairProtocolFee(pair, CLASSIC_FARM_PROTOCOL_FEE);
-        factory.setPairFeeReceiver(pair, feeReceiver);
-        s.activeFarm[pair] = true;
-        emit ClassicFarmActivated(pair, allocPoint, feeReceiver);
+        _activateClassicFarm(ApexControllerStorage.layout(), pair, allocPoint);
     }
 
     function deactivateClassicFarm(address pair) external {
@@ -293,45 +314,32 @@ library ApexControllerFeePolicy {
         s.totalAllocPoint -= s.farmAllocPoint[pair];
         s.farmAllocPoint[pair] = 0;
 
+        ApexControllerStorage.LauncherPoolConfig storage poolConfig = s.launcherPoolConfigs[pair];
         IFeeCenter.CreatorFeeConfig memory config = s.feeCenter.creatorFeeConfig(pair);
-        if (config.recipient != address(0)) _collectClassicProtocolFees(s, pair);
-        uint256 protocolFee = factory.protocolFee();
-        uint256 minimumProtocolFee = uint256(config.feeBps) * CLASSIC_PROTOCOL_FEE_BPS_SCALE;
-        if (protocolFee < minimumProtocolFee) protocolFee = minimumProtocolFee;
-        factory.setPairProtocolFee(pair, protocolFee);
-        factory.setPairFeeReceiver(pair, config.recipient == address(0) ? factory.feeReceiver() : address(s.feeCenter));
+        if (poolConfig.exists) {
+            _collectClassicProtocolFees(s, pair);
+            _applyLauncherBaseFee(s, pair);
+            s.activeLauncherPools.remove(pair);
+        } else {
+            if (config.recipient != address(0)) _collectClassicProtocolFees(s, pair);
+            uint256 protocolFee = factory.protocolFee();
+            uint256 minimumProtocolFee = uint256(config.feeBps) * CLASSIC_PROTOCOL_FEE_BPS_SCALE;
+            if (protocolFee < minimumProtocolFee) protocolFee = minimumProtocolFee;
+            factory.setPairProtocolFee(pair, protocolFee);
+            factory.setPairFeeReceiver(
+                pair, config.recipient == address(0) ? factory.feeReceiver() : address(s.feeCenter)
+            );
+        }
         s.activeFarm[pair] = false;
         emit ClassicFarmDeactivated(pair);
     }
 
-    function activateCLFarm(address pool, uint256 allocPoint) external {
-        require(pool != address(0), ApexErrors.ZERO_ADDRESS());
-        ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
-        ICLMasterChef clMasterChef = s.clMasterChef;
-        require(address(clMasterChef) != address(0), ApexErrors.ZERO_ADDRESS());
-        ICLFactory factory = _canonicalCLFactory(s, pool);
-        if (!s.registeredFarm[pool]) {
-            address lmPoolDeployer = clMasterChef.lmPoolDeployer();
-            require(lmPoolDeployer != address(0), ApexErrors.ZERO_ADDRESS());
-            factory.setLmPoolDeployer(lmPoolDeployer);
-            clMasterChef.addPool(pool, 0);
-            s.registeredFarm[pool] = true;
-            s.clFarms.add(pool);
-            emit CLFarmRegistered(address(factory), pool);
-        }
-        require(allocPoint != 0 || !s.activeFarm[pool], ApexErrors.ZERO_AMOUNT());
-        s.classicChef.massUpdatePools();
-        clMasterChef.massUpdatePools();
-        clMasterChef.setPoolAllocPoint(pool, allocPoint);
-        s.totalAllocPoint = s.totalAllocPoint - s.farmAllocPoint[pool] + allocPoint;
-        s.farmAllocPoint[pool] = allocPoint;
+    function registerCLFarm(address pool) external {
+        _registerCLFarm(ApexControllerStorage.layout(), pool);
+    }
 
-        if (s.feeCenter.creatorFeeConfig(pool).recipient != address(0)) {
-            _collectCLProtocolFees(s, factory, pool, type(uint128).max, type(uint128).max);
-        }
-        factory.setFeeProtocol(pool, CL_FARM_PROTOCOL_FEE, CL_FARM_PROTOCOL_FEE);
-        s.activeFarm[pool] = true;
-        emit CLFarmActivated(address(factory), pool, allocPoint);
+    function activateCLFarm(address pool, uint256 allocPoint) external {
+        _activateCLFarm(ApexControllerStorage.layout(), pool, allocPoint);
     }
 
     function deactivateCLFarm(address pool) external {
@@ -350,13 +358,20 @@ library ApexControllerFeePolicy {
         s.totalAllocPoint -= s.farmAllocPoint[pool];
         s.farmAllocPoint[pool] = 0;
 
+        ApexControllerStorage.LauncherPoolConfig storage poolConfig = s.launcherPoolConfigs[pool];
         IFeeCenter.CreatorFeeConfig memory config = s.feeCenter.creatorFeeConfig(pool);
-        if (config.recipient != address(0)) {
+        if (poolConfig.exists) {
             _collectCLProtocolFees(s, factory, pool, type(uint128).max, type(uint128).max);
+            _applyLauncherBaseFee(s, pool);
+            s.activeLauncherPools.remove(pool);
+        } else {
+            if (config.recipient != address(0)) {
+                _collectCLProtocolFees(s, factory, pool, type(uint128).max, type(uint128).max);
+            }
+            uint32 protocolFee = _clGlobalProtocolFee(s);
+            if (protocolFee < config.feeBps) protocolFee = config.feeBps;
+            factory.setFeeProtocol(pool, protocolFee, protocolFee);
         }
-        uint32 protocolFee = _clGlobalProtocolFee(s);
-        if (protocolFee < config.feeBps) protocolFee = config.feeBps;
-        factory.setFeeProtocol(pool, protocolFee, protocolFee);
         s.activeFarm[pool] = false;
         emit CLFarmDeactivated(address(factory), pool);
     }
@@ -394,17 +409,79 @@ library ApexControllerFeePolicy {
     function launcherAgreement(bytes32 agreementId)
         external
         view
-        returns (address recipient, uint16 creatorFeeBps, bool active)
+        returns (address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps, bool startGauged, bool active)
     {
         ApexControllerStorage.LauncherAgreement memory agreement =
             ApexControllerStorage.layout().launcherAgreements[agreementId];
-        return (agreement.recipient, agreement.creatorFeeBps, agreement.active);
+        return
+            (
+                agreement.recipient,
+                agreement.creatorFeeBps,
+                agreement.veGigaFeeBps,
+                agreement.startGauged,
+                agreement.active
+            );
     }
 
-    function launcherAuthorization(address caller) external view returns (bytes32 agreementId, uint8 permissions) {
+    function launcherAuthorization(address caller)
+        external
+        view
+        returns (bytes32 agreementId, IApexController.LauncherPermission permission)
+    {
         ApexControllerStorage.LauncherAuthorization memory authorization =
             ApexControllerStorage.layout().launcherAuthorizations[caller];
-        return (authorization.agreementId, authorization.permissions);
+        return (authorization.agreementId, IApexController.LauncherPermission(authorization.permissions));
+    }
+
+    function launcherPoolConfig(address pool)
+        external
+        view
+        returns (
+            bytes32 agreementId,
+            address launcher,
+            address recipient,
+            uint16 creatorFeeBps,
+            uint16 veGigaFeeBps,
+            IApexController.PoolKind poolKind,
+            bool gauged
+        )
+    {
+        ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
+        ApexControllerStorage.LauncherPoolConfig memory poolConfig = s.launcherPoolConfigs[pool];
+        require(poolConfig.exists, ApexErrors.INVALID_POOL(pool));
+        IFeeCenter.CreatorFeeConfig memory creatorConfig = s.feeCenter.creatorFeeConfig(pool);
+        agreementId = poolConfig.agreementId;
+        launcher = poolConfig.launcher;
+        recipient = creatorConfig.recipient;
+        creatorFeeBps = creatorConfig.feeBps;
+        veGigaFeeBps = poolConfig.veGigaFeeBps;
+        poolKind = IApexController.PoolKind(poolConfig.poolKind);
+        gauged = s.activeFarm[pool];
+    }
+
+    function launcherAgreementIds(bool activeOnly) external view returns (bytes32[] memory) {
+        ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
+        return activeOnly ? s.activeLauncherAgreementIds.values() : s.launcherAgreementIds.values();
+    }
+
+    function launcherCallers() external view returns (address[] memory) {
+        return ApexControllerStorage.layout().launcherCallers.values();
+    }
+
+    function launcherPools() external view returns (address[] memory) {
+        return ApexControllerStorage.layout().launcherPools.values();
+    }
+
+    function activeLauncherPools() external view returns (address[] memory) {
+        return ApexControllerStorage.layout().activeLauncherPools.values();
+    }
+
+    function launcherPoolsByAgreement(bytes32 agreementId) external view returns (address[] memory) {
+        return ApexControllerStorage.layout().launcherPoolsByAgreement[agreementId].values();
+    }
+
+    function launcherPoolsByCaller(address caller) external view returns (address[] memory) {
+        return ApexControllerStorage.layout().launcherPoolsByCaller[caller].values();
     }
 
     function _clGlobalProtocolFee(ApexControllerStorage.Layout storage s) private view returns (uint32) {
@@ -436,16 +513,132 @@ library ApexControllerFeePolicy {
         s.feeCenter.distributeCLCreatorFees(pool, amount0, amount1, feeProtocol0, feeProtocol1);
     }
 
-    function _launcherAgreement(ApexControllerStorage.Layout storage s, uint8 permission)
-        private
-        view
-        returns (bytes32 agreementId, ApexControllerStorage.LauncherAgreement memory agreement)
-    {
+    function _launcherAgreement(
+        ApexControllerStorage.Layout storage s,
+        IApexController.LauncherPermission requiredPermission
+    ) private view returns (bytes32 agreementId, ApexControllerStorage.LauncherAgreement memory agreement) {
         ApexControllerStorage.LauncherAuthorization memory authorization = s.launcherAuthorizations[msg.sender];
-        require(authorization.permissions & permission != 0, ApexErrors.NOT_AUTHORIZED(msg.sender));
+        IApexController.LauncherPermission permission = IApexController.LauncherPermission(authorization.permissions);
+        require(
+            permission == requiredPermission || permission == IApexController.LauncherPermission.BOTH,
+            ApexErrors.NOT_AUTHORIZED(msg.sender)
+        );
         agreementId = authorization.agreementId;
         agreement = s.launcherAgreements[agreementId];
         require(agreement.active, ApexErrors.NOT_AUTHORIZED(msg.sender));
+    }
+
+    function _registerLauncherPool(
+        ApexControllerStorage.Layout storage s,
+        bytes32 agreementId,
+        address pool,
+        IApexController.PoolKind poolKind,
+        ApexControllerStorage.LauncherAgreement memory agreement
+    ) private {
+        require(!s.launcherPoolConfigs[pool].exists, ApexErrors.POOL_EXISTS(pool));
+        s.launcherPoolConfigs[pool] = ApexControllerStorage.LauncherPoolConfig({
+            agreementId: agreementId,
+            launcher: msg.sender,
+            veGigaFeeBps: agreement.veGigaFeeBps,
+            poolKind: uint8(poolKind),
+            exists: true
+        });
+        s.launcherPools.add(pool);
+        s.launcherPoolsByAgreement[agreementId].add(pool);
+        s.launcherPoolsByCaller[msg.sender].add(pool);
+        s.feeCenter.setCreatorFeeConfig(pool, agreement.recipient, agreement.creatorFeeBps, uint8(poolKind));
+    }
+
+    function _applyLauncherBaseFee(ApexControllerStorage.Layout storage s, address pool) private {
+        ApexControllerStorage.LauncherPoolConfig storage poolConfig = s.launcherPoolConfigs[pool];
+        require(poolConfig.exists, ApexErrors.INVALID_POOL(pool));
+        uint16 creatorFeeBps = s.feeCenter.creatorFeeConfig(pool).feeBps;
+        uint256 totalProtocolFeeBps = uint256(creatorFeeBps) + poolConfig.veGigaFeeBps;
+        require(totalProtocolFeeBps <= BPS, ApexErrors.FEE_TOO_HIGH());
+
+        if (poolConfig.poolKind == uint8(IApexController.PoolKind.CLASSIC)) {
+            s.classicFactory.setPairProtocolFee(pool, totalProtocolFeeBps * CLASSIC_PROTOCOL_FEE_BPS_SCALE);
+            s.classicFactory.setPairFeeReceiver(pool, address(s.feeCenter));
+        } else {
+            _canonicalCLFactory(s, pool).setFeeProtocol(pool, uint32(totalProtocolFeeBps), uint32(totalProtocolFeeBps));
+        }
+    }
+
+    function _activateClassicFarm(ApexControllerStorage.Layout storage s, address pair, uint256 allocPoint) private {
+        IClassicChef classicChef = s.classicChef;
+        IClassicFactory factory = s.classicFactory;
+        address feeReceiver = address(s.feeCenter);
+        require(address(classicChef) != address(0) && feeReceiver != address(0), ApexErrors.ZERO_ADDRESS());
+
+        if (!s.registeredFarm[pair]) _registerClassicFarm(s, pair);
+        require(allocPoint != 0 || !s.activeFarm[pair], ApexErrors.ZERO_AMOUNT());
+        classicChef.massUpdatePools();
+        s.clMasterChef.massUpdatePools();
+        classicChef.setPoolAllocPoint(pair, allocPoint);
+        s.totalAllocPoint = s.totalAllocPoint - s.farmAllocPoint[pair] + allocPoint;
+        s.farmAllocPoint[pair] = allocPoint;
+
+        if (s.launcherPoolConfigs[pair].exists) _collectClassicProtocolFees(s, pair);
+        factory.setPairProtocolFee(pair, CLASSIC_FARM_PROTOCOL_FEE);
+        factory.setPairFeeReceiver(pair, feeReceiver);
+        s.activeFarm[pair] = true;
+        if (s.launcherPoolConfigs[pair].exists) s.activeLauncherPools.add(pair);
+        emit ClassicFarmActivated(pair, allocPoint, feeReceiver);
+    }
+
+    function _registerClassicFarm(ApexControllerStorage.Layout storage s, address pair) private {
+        require(address(s.classicChef) != address(0), ApexErrors.ZERO_ADDRESS());
+        require(s.classicFactory.isPair(pair), ApexErrors.NOT_PAIR(pair));
+        require(!s.registeredFarm[pair], ApexErrors.POOL_EXISTS(pair));
+
+        s.classicChef.addPool(pair, 0);
+        s.registeredFarm[pair] = true;
+        s.classicFarms.add(pair);
+        emit ClassicFarmRegistered(pair);
+    }
+
+    function _activateCLFarm(ApexControllerStorage.Layout storage s, address pool, uint256 allocPoint) private {
+        require(pool != address(0), ApexErrors.ZERO_ADDRESS());
+        ICLMasterChef clMasterChef = s.clMasterChef;
+        require(address(clMasterChef) != address(0), ApexErrors.ZERO_ADDRESS());
+        ICLFactory factory = _canonicalCLFactory(s, pool);
+        if (!s.registeredFarm[pool]) _registerCLFarm(s, pool);
+        require(allocPoint != 0 || !s.activeFarm[pool], ApexErrors.ZERO_AMOUNT());
+        s.classicChef.massUpdatePools();
+        clMasterChef.massUpdatePools();
+        clMasterChef.setPoolAllocPoint(pool, allocPoint);
+        s.totalAllocPoint = s.totalAllocPoint - s.farmAllocPoint[pool] + allocPoint;
+        s.farmAllocPoint[pool] = allocPoint;
+
+        if (s.launcherPoolConfigs[pool].exists) {
+            _collectCLProtocolFees(s, factory, pool, type(uint128).max, type(uint128).max);
+        }
+        factory.setFeeProtocol(pool, CL_FARM_PROTOCOL_FEE, CL_FARM_PROTOCOL_FEE);
+        s.activeFarm[pool] = true;
+        if (s.launcherPoolConfigs[pool].exists) s.activeLauncherPools.add(pool);
+        emit CLFarmActivated(address(factory), pool, allocPoint);
+    }
+
+    function _registerCLFarm(ApexControllerStorage.Layout storage s, address pool) private {
+        require(pool != address(0), ApexErrors.ZERO_ADDRESS());
+        ICLMasterChef clMasterChef = s.clMasterChef;
+        require(address(clMasterChef) != address(0), ApexErrors.ZERO_ADDRESS());
+        require(!s.registeredFarm[pool], ApexErrors.POOL_EXISTS(pool));
+
+        ICLFactory factory = _canonicalCLFactory(s, pool);
+        address lmPoolDeployer = clMasterChef.lmPoolDeployer();
+        require(lmPoolDeployer != address(0), ApexErrors.ZERO_ADDRESS());
+        factory.setLmPoolDeployer(lmPoolDeployer);
+        clMasterChef.addPool(pool, 0);
+        s.registeredFarm[pool] = true;
+        s.clFarms.add(pool);
+        emit CLFarmRegistered(address(factory), pool);
+    }
+
+    function _validateFeeSplit(address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps) private pure {
+        if (creatorFeeBps == 0) require(recipient == address(0), ApexErrors.INVALID_ASSORTMENT());
+        else require(recipient != address(0), ApexErrors.ZERO_ADDRESS());
+        require(uint256(creatorFeeBps) + veGigaFeeBps <= BPS, ApexErrors.FEE_TOO_HIGH());
     }
 
     function _canonicalCLFactory(ApexControllerStorage.Layout storage s, address poolAddress)

@@ -406,8 +406,8 @@ contract ApexControllerEmissionsTest is Test {
         address creator = address(0xC0FFEE);
         ApexEmissionMockERC20 tokenC = new ApexEmissionMockERC20("Launcher Token", "LCH");
 
-        controller.setLauncherAgreement(agreementId, creator, 500, true);
-        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CLASSIC());
+        controller.setLauncherAgreement(agreementId, creator, 500, 1_500, false, true);
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.CLASSIC);
 
         vm.prank(alice);
         address pair = controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
@@ -419,23 +419,27 @@ contract ApexControllerEmissionsTest is Test {
         assertEq(config.feeBps, 500);
         assertEq(config.poolKind, uint8(IApexController.PoolKind.CLASSIC));
 
-        controller.setLauncherAgreement(agreementId, address(0xBEEF), 300, true);
+        controller.setLauncherAgreement(agreementId, address(0xBEEF), 300, 1_700, false, true);
         config = feeCenter.creatorFeeConfig(pair);
         assertEq(config.recipient, creator);
         assertEq(config.feeBps, 500);
+        assertEq(ClassicPool(pair).protocolFee(), 200_000);
+        (,,,, uint16 veGigaFeeBps,, bool gauged) = controller.launcherPoolConfig(pair);
+        assertEq(veGigaFeeBps, 1_500);
+        assertFalse(gauged);
     }
 
     function testLauncherClassicPoolRejectsUnauthorizedWrongKindAndExistingPool() public {
         bytes32 agreementId = keccak256("NTROPY");
         ApexEmissionMockERC20 tokenC = new ApexEmissionMockERC20("Launcher Token", "LCH");
-        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 500, true);
-        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CL());
+        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 500, 1_500, false, true);
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.CL);
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(ApexErrors.NOT_AUTHORIZED.selector, alice));
         controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
 
-        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CLASSIC());
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.CLASSIC);
         vm.prank(alice);
         controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
 
@@ -452,25 +456,25 @@ contract ApexControllerEmissionsTest is Test {
         bytes32 agreementId = keccak256("NTROPY");
         vm.prank(alice);
         vm.expectRevert();
-        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 500, true);
+        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 500, 1_500, false, true);
 
-        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 500, false);
-        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CLASSIC());
+        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 500, 1_500, false, false);
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.CLASSIC);
         ApexEmissionMockERC20 tokenC = new ApexEmissionMockERC20("Launcher Token", "LCH");
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(ApexErrors.NOT_AUTHORIZED.selector, alice));
         controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
 
         vm.expectRevert(ApexErrors.FEE_TOO_HIGH.selector);
-        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 10_001, true);
+        controller.setLauncherAgreement(agreementId, address(0xC0FFEE), 10_001, 0, false, true);
     }
 
     function testPermissionlessClassicCreatorCollectionPaysFivePercentOfGrossFees() public {
         bytes32 agreementId = keccak256("NTROPY");
         address creator = address(0xC0FFEE);
         ApexEmissionMockERC20 tokenC = new ApexEmissionMockERC20("Launcher Token", "LCH");
-        controller.setLauncherAgreement(agreementId, creator, 500, true);
-        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CLASSIC());
+        controller.setLauncherAgreement(agreementId, creator, 500, 1_500, false, true);
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.CLASSIC);
         vm.prank(alice);
         address pair = controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
 
@@ -496,8 +500,8 @@ contract ApexControllerEmissionsTest is Test {
         bytes32 agreementId = keccak256("NTROPY");
         address creator = address(0xC0FFEE);
         ApexEmissionMockERC20 tokenC = new ApexEmissionMockERC20("Launcher Token", "LCH");
-        controller.setLauncherAgreement(agreementId, creator, 500, true);
-        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CLASSIC());
+        controller.setLauncherAgreement(agreementId, creator, 500, 1_500, false, true);
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.CLASSIC);
         vm.prank(alice);
         address pair = controller.createLauncherClassicPool(address(tokenA), address(tokenC), false);
         _addLiquidity(pair, alice, 1_000 ether, 1_000 ether);
@@ -522,8 +526,8 @@ contract ApexControllerEmissionsTest is Test {
     function testLauncherAgreementCreatesAndInitializesCLPool() public {
         bytes32 agreementId = keccak256("NTROPY");
         address creator = address(0xC0FFEE);
-        controller.setLauncherAgreement(agreementId, creator, 500, true);
-        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CL());
+        controller.setLauncherAgreement(agreementId, creator, 500, 1_500, false, true);
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.CL);
 
         vm.prank(alice);
         address pool = controller.createLauncherCLPool(address(tokenA), address(feeToken), 3000, 1 << 96);
@@ -547,8 +551,8 @@ contract ApexControllerEmissionsTest is Test {
     function testPermissionlessCLCreatorCollectionPaysFivePercentOfGrossFeesAcrossGaugeTransition() public {
         bytes32 agreementId = keccak256("NTROPY");
         address creator = address(0xC0FFEE);
-        controller.setLauncherAgreement(agreementId, creator, 500, true);
-        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CL());
+        controller.setLauncherAgreement(agreementId, creator, 500, 1_500, false, true);
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.CL);
         vm.prank(alice);
         address poolAddress = controller.createLauncherCLPool(address(tokenA), address(feeToken), 3000, 1 << 96);
         ApexMockCLPool pool = ApexMockCLPool(poolAddress);
@@ -571,18 +575,18 @@ contract ApexControllerEmissionsTest is Test {
         assertEq(feeCenter.creatorFeeConfig(poolAddress).recipient, creator);
     }
 
-    function testLauncherPoolCreatorFeeUpdateSettlesOldTermsBeforeRotating() public {
+    function testLauncherPoolFeeSplitUpdateSettlesOldTermsBeforeRotating() public {
         bytes32 agreementId = keccak256("NTROPY");
         address oldCreator = address(0xC0FFEE);
         address newCreator = address(0xCAFE);
-        controller.setLauncherAgreement(agreementId, oldCreator, 500, true);
-        controller.setLauncherCaller(alice, agreementId, controller.LAUNCHER_PERMISSION_CL());
+        controller.setLauncherAgreement(agreementId, oldCreator, 500, 1_500, false, true);
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.CL);
         vm.prank(alice);
         address poolAddress = controller.createLauncherCLPool(address(tokenA), address(feeToken), 3000, 1 << 96);
         ApexMockCLPool pool = ApexMockCLPool(poolAddress);
 
         pool.seedProtocolFees(20 ether, 40 ether);
-        controller.updateLauncherPoolCreatorFee(poolAddress, newCreator, 300);
+        controller.updateLauncherPoolFeeSplit(poolAddress, newCreator, 300, 1_700);
         assertEq(ApexEmissionMockERC20(pool.token0()).balanceOf(oldCreator), 5 ether);
         assertEq(ApexEmissionMockERC20(pool.token1()).balanceOf(oldCreator), 10 ether);
 
@@ -598,19 +602,142 @@ contract ApexControllerEmissionsTest is Test {
         address creatorA = address(0xC0FFEE);
         address creatorB = address(0xBEEF);
 
-        controller.setLauncherAgreement(agreementA, creatorA, 500, true);
-        controller.setLauncherAgreement(agreementB, creatorB, 300, true);
-        controller.setLauncherCaller(
-            alice, agreementA, controller.LAUNCHER_PERMISSION_CLASSIC() | controller.LAUNCHER_PERMISSION_CL()
-        );
-        controller.setLauncherCaller(
-            bob, agreementB, controller.LAUNCHER_PERMISSION_CLASSIC() | controller.LAUNCHER_PERMISSION_CL()
-        );
+        controller.setLauncherAgreement(agreementA, creatorA, 500, 1_500, false, true);
+        controller.setLauncherAgreement(agreementB, creatorB, 300, 1_700, false, true);
+        controller.setLauncherCaller(alice, agreementA, IApexController.LauncherPermission.BOTH);
+        controller.setLauncherCaller(bob, agreementB, IApexController.LauncherPermission.BOTH);
 
         _assertLauncherClassicSplit(alice, creatorA, 500, "Classic A", "CLA");
         _assertLauncherClassicSplit(bob, creatorB, 300, "Classic B", "CLB");
         _assertLauncherCLSplit(alice, creatorA, 500, "CL A", "CLA-CL");
         _assertLauncherCLSplit(bob, creatorB, 300, "CL B", "CLB-CL");
+    }
+
+    function testStartGaugedCreatesClassicAndCLFarmWithFixedGaugedSplitAndZeroWeight() public {
+        bytes32 agreementId = keccak256("GAUGED_LAUNCHER");
+        address creator = address(0xC0FFEE);
+        ApexEmissionMockERC20 classicToken = new ApexEmissionMockERC20("Gauged Classic", "GCL");
+        ApexEmissionMockERC20 clToken = new ApexEmissionMockERC20("Gauged CL", "GCL-CL");
+        controller.setLauncherAgreement(agreementId, creator, 500, 500, true, true);
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.BOTH);
+
+        vm.startPrank(alice);
+        address pair = controller.createLauncherClassicPool(address(tokenA), address(classicToken), false);
+        address pool = controller.createLauncherCLPool(address(feeToken), address(clToken), 100, 1 << 96);
+        vm.stopPrank();
+
+        assertTrue(controller.isFarmRegistered(pair));
+        assertTrue(controller.isFarmActive(pair));
+        assertEq(ClassicPool(pair).protocolFee(), 1_000_000);
+        assertEq(ClassicPool(pair).feeReceiver(), address(feeCenter));
+        (, uint256 classicAllocPoint,,,) = classicChef.poolInfo(classicChef.pidOf(pair));
+        assertEq(classicAllocPoint, 0);
+
+        assertTrue(controller.isFarmRegistered(pool));
+        assertTrue(controller.isFarmActive(pool));
+        assertNotEq(ApexMockCLPool(pool).lmPool(), address(0));
+        (uint32 feeProtocol0, uint32 feeProtocol1) = clFactory.feeProtocols(pool);
+        assertEq(feeProtocol0, 10_000);
+        assertEq(feeProtocol1, 10_000);
+        (uint256 clAllocPoint,,,,,) = clChef.poolInfo(clChef.v3PoolAddressPid(pool));
+        assertEq(clAllocPoint, 0);
+        assertEq(controller.activeLauncherPools().length, 2);
+
+        controller.activateClassicFarm(pair, 1_000);
+        controller.deactivateClassicFarm(pair);
+        controller.deactivateCLFarm(pool);
+
+        assertEq(ClassicPool(pair).protocolFee(), 100_000);
+        (feeProtocol0, feeProtocol1) = clFactory.feeProtocols(pool);
+        assertEq(feeProtocol0, 1_000);
+        assertEq(feeProtocol1, 1_000);
+        assertEq(controller.activeLauncherPools().length, 0);
+    }
+
+    function testLauncherConfigurationIsFullyEnumerableAndTyped() public {
+        bytes32 agreementA = keccak256("ENUM_A");
+        bytes32 agreementB = keccak256("ENUM_B");
+        controller.setLauncherAgreement(agreementA, address(0xA11CE), 500, 1_500, false, true);
+        controller.setLauncherAgreement(agreementB, address(0xB0B), 300, 700, false, false);
+        controller.setLauncherCaller(alice, agreementA, IApexController.LauncherPermission.BOTH);
+        controller.setLauncherCaller(bob, agreementB, IApexController.LauncherPermission.CL);
+
+        bytes32[] memory allAgreements = controller.launcherAgreementIds(false);
+        bytes32[] memory activeAgreements = controller.launcherAgreementIds(true);
+        address[] memory callers = controller.launcherCallers();
+        assertEq(allAgreements.length, 2);
+        assertEq(activeAgreements.length, 1);
+        assertEq(activeAgreements[0], agreementA);
+        assertEq(callers.length, 2);
+
+        ApexEmissionMockERC20 pairedToken = new ApexEmissionMockERC20("Enumerable", "ENUM");
+        vm.prank(alice);
+        address pool = controller.createLauncherClassicPool(address(tokenA), address(pairedToken), false);
+
+        assertEq(controller.launcherPools().length, 1);
+        assertEq(controller.launcherPoolsByAgreement(agreementA)[0], pool);
+        assertEq(controller.launcherPoolsByCaller(alice)[0], pool);
+        (
+            bytes32 poolAgreement,
+            address launcher,
+            address recipient,
+            uint16 creatorFeeBps,
+            uint16 veGigaFeeBps,
+            IApexController.PoolKind poolKind,
+            bool gauged
+        ) = controller.launcherPoolConfig(pool);
+        assertEq(poolAgreement, agreementA);
+        assertEq(launcher, alice);
+        assertEq(recipient, address(0xA11CE));
+        assertEq(creatorFeeBps, 500);
+        assertEq(veGigaFeeBps, 1_500);
+        assertEq(uint8(poolKind), uint8(IApexController.PoolKind.CLASSIC));
+        assertFalse(gauged);
+
+        controller.setLauncherCaller(bob, bytes32(0), IApexController.LauncherPermission.NONE);
+        assertEq(controller.launcherCallers().length, 1);
+        (bytes32 revokedAgreement, IApexController.LauncherPermission permission) =
+            controller.launcherAuthorization(bob);
+        assertEq(revokedAgreement, bytes32(0));
+        assertEq(uint8(permission), uint8(IApexController.LauncherPermission.NONE));
+    }
+
+    function testLauncherPoolFeeSplitCanRemoveAndRestoreCreatorWithoutLosingBasePolicy() public {
+        bytes32 agreementId = keccak256("REMOVABLE_CREATOR");
+        address creator = address(0xC0FFEE);
+        controller.setLauncherAgreement(agreementId, creator, 500, 1_500, false, true);
+        controller.setLauncherCaller(alice, agreementId, IApexController.LauncherPermission.CL);
+        vm.prank(alice);
+        address poolAddress = controller.createLauncherCLPool(address(tokenA), address(feeToken), 3000, 1 << 96);
+        ApexMockCLPool pool = ApexMockCLPool(poolAddress);
+
+        pool.seedProtocolFees(20 ether, 40 ether);
+        controller.updateLauncherPoolFeeSplit(poolAddress, address(0), 0, 1_000);
+        assertEq(ApexEmissionMockERC20(pool.token0()).balanceOf(creator), 5 ether);
+        assertEq(ApexEmissionMockERC20(pool.token1()).balanceOf(creator), 10 ether);
+        assertEq(feeCenter.creatorFeeConfig(poolAddress).recipient, address(0));
+        (uint32 feeProtocol0, uint32 feeProtocol1) = clFactory.feeProtocols(poolAddress);
+        assertEq(feeProtocol0, 1_000);
+        assertEq(feeProtocol1, 1_000);
+
+        vm.prank(bob);
+        controller.collectLauncherCLProtocolFees(poolAddress);
+        controller.updateLauncherPoolFeeSplit(poolAddress, address(0xCAFE), 200, 800);
+        assertEq(feeCenter.creatorFeeConfig(poolAddress).recipient, address(0xCAFE));
+        assertEq(feeCenter.creatorFeeConfig(poolAddress).feeBps, 200);
+    }
+
+    function testLauncherFeeSplitRejectsAmbiguousRecipientAndOverAllocation() public {
+        bytes32 agreementId = keccak256("INVALID_SPLIT");
+
+        vm.expectRevert(ApexErrors.ZERO_ADDRESS.selector);
+        controller.setLauncherAgreement(agreementId, address(0), 500, 1_500, false, true);
+
+        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
+        controller.setLauncherAgreement(agreementId, address(0xCAFE), 0, 2_000, false, true);
+
+        vm.expectRevert(ApexErrors.FEE_TOO_HIGH.selector);
+        controller.setLauncherAgreement(agreementId, address(0xCAFE), 500, 9_501, false, true);
     }
 
     function testFarmDeactivationRestoresConfiguredUngaugedProtocolFeePolicy() public {
