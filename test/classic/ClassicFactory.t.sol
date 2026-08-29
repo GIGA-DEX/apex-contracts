@@ -11,6 +11,7 @@ import {ApexController} from "../../src/core/ApexController.sol";
 import {ClassicFactory} from "../../src/core/ClassicFactory.sol";
 import {ClassicPool} from "../../src/core/ClassicPool.sol";
 import {IApexController} from "../../src/core/interfaces/IApexController.sol";
+import {IFeeCenter} from "../../src/core/interfaces/IFeeCenter.sol";
 import {ApexErrors} from "../../src/core/libraries/common/ApexErrors.sol";
 
 contract ApexMockERC20 is ERC20 {
@@ -40,6 +41,10 @@ contract ApexProtocolMock {
         apexController = _apexController;
         owner = _apexController;
         vault = address(this);
+    }
+
+    function creatorFeeConfig(address) external pure returns (IFeeCenter.CreatorFeeConfig memory config) {
+        return config;
     }
 }
 

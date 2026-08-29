@@ -13,6 +13,7 @@ import {ClassicPool} from "../src/core/ClassicPool.sol";
 import {CLMasterChef} from "../src/core/CLMasterChef.sol";
 import {ApexVault} from "../src/core/ApexVault.sol";
 import {IApexController} from "../src/core/interfaces/IApexController.sol";
+import {IFeeCenter} from "../src/core/interfaces/IFeeCenter.sol";
 
 contract ApexGasToken is ERC20 {
     constructor(string memory _name, string memory _symbol) ERC20(_name, _symbol) {}
@@ -186,6 +187,10 @@ contract ApexGasFeeCenterMock {
     constructor(address _apexController, address _vault) {
         apexController = _apexController;
         vault = _vault;
+    }
+
+    function creatorFeeConfig(address) external pure returns (IFeeCenter.CreatorFeeConfig memory config) {
+        return config;
     }
 }
 

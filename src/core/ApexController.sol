@@ -31,9 +31,8 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
     using SafeERC20 for IERC20;
 
     uint256 public constant REWARD_PRECISION = 1e12;
-    uint256 private constant CLASSIC_DEFAULT_PROTOCOL_FEE = 200_000; // 20% protocol share when ungauged
-    uint256 private constant CLASSIC_FARM_PROTOCOL_FEE = 1_000_000; // 100% go to stakers
-    uint32 private constant CL_FARM_PROTOCOL_FEE = 10_000; // 100% go to stakers
+    uint8 public constant LAUNCHER_PERMISSION_CLASSIC = 1;
+    uint8 public constant LAUNCHER_PERMISSION_CL = 2;
 
     bytes32 public constant FEE_OPERATOR = keccak256("FEE_OPERATOR");
     bytes32 public constant EMISSION_OPERATOR = keccak256("EMISSION_OPERATOR");
@@ -59,6 +58,18 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
     event RewardPaid(address indexed pool, address indexed to, uint256 amount);
     event RewardForfeited(address indexed pool, uint256 amount);
     event EmissionCenterSet(address indexed center);
+    event LauncherAgreementSet(
+        bytes32 indexed agreementId, address indexed recipient, uint16 creatorFeeBps, bool active
+    );
+    event LauncherCallerSet(address indexed caller, bytes32 indexed agreementId, uint8 permissions);
+    event LauncherPoolCreated(
+        bytes32 indexed agreementId,
+        address indexed launcher,
+        address indexed pool,
+        uint8 poolKind,
+        address recipient,
+        uint16 creatorFeeBps
+    );
 
     constructor() {
         _disableInitializers();
@@ -198,6 +209,71 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         return ApexControllerFeePolicy.collectClassicProtocolFees(_pair);
     }
 
+    function collectLauncherCLProtocolFees(address _pool)
+        external
+        nonReentrant
+        returns (uint128 amount0, uint128 amount1)
+    {
+        return ApexControllerFeePolicy.collectLauncherCLProtocolFees(_pool);
+    }
+
+    function collectLauncherClassicProtocolFees(address _pair)
+        external
+        nonReentrant
+        returns (uint256 amount0, uint256 amount1)
+    {
+        return ApexControllerFeePolicy.collectLauncherClassicProtocolFees(_pair);
+    }
+
+    function setLauncherAgreement(bytes32 _agreementId, address _recipient, uint16 _creatorFeeBps, bool _active)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        ApexControllerFeePolicy.setLauncherAgreement(_agreementId, _recipient, _creatorFeeBps, _active);
+    }
+
+    function setLauncherCaller(address _caller, bytes32 _agreementId, uint8 _permissions)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        ApexControllerFeePolicy.setLauncherCaller(_caller, _agreementId, _permissions);
+    }
+
+    function updateLauncherPoolCreatorFee(address _pool, address _recipient, uint16 _creatorFeeBps)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        ApexControllerFeePolicy.updateLauncherPoolCreatorFee(_pool, _recipient, _creatorFeeBps);
+    }
+
+    function createLauncherClassicPool(address _tokenA, address _tokenB, bool _stable)
+        external
+        nonReentrant
+        returns (address pair)
+    {
+        return ApexControllerFeePolicy.createLauncherClassicPool(_tokenA, _tokenB, _stable);
+    }
+
+    function createLauncherCLPool(address _tokenA, address _tokenB, uint24 _fee, uint160 _sqrtPriceX96)
+        external
+        nonReentrant
+        returns (address pool)
+    {
+        return ApexControllerFeePolicy.createLauncherCLPool(_tokenA, _tokenB, _fee, _sqrtPriceX96);
+    }
+
+    function launcherAgreement(bytes32 _agreementId)
+        external
+        view
+        returns (address recipient, uint16 creatorFeeBps, bool active)
+    {
+        return ApexControllerFeePolicy.launcherAgreement(_agreementId);
+    }
+
+    function launcherAuthorization(address _caller) external view returns (bytes32 agreementId, uint8 permissions) {
+        return ApexControllerFeePolicy.launcherAuthorization(_caller);
+    }
+
     // farms
     function registerClassicFarm(address _pair) external onlyRole(DEFAULT_ADMIN_ROLE) {
         ApexControllerStorage.Layout storage $ = ApexControllerStorage.layout();
@@ -213,55 +289,11 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
     }
 
     function activateClassicFarm(address _pair, uint256 _allocPoint) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        ApexControllerStorage.Layout storage $ = ApexControllerStorage.layout();
-        IClassicChef classicChef = $.classicChef;
-        IClassicFactory factory = $.classicFactory;
-        address feeReceiver = address($.feeCenter);
-        require(address(classicChef) != address(0) && feeReceiver != address(0), ApexErrors.ZERO_ADDRESS());
-
-        if (!$.registeredFarm[_pair]) {
-            require(factory.isPair(_pair), ApexErrors.NOT_PAIR(_pair));
-            classicChef.addPool(_pair, 0);
-            $.registeredFarm[_pair] = true;
-            $.classicFarms.add(_pair);
-            emit ClassicFarmRegistered(_pair);
-        }
-        require(_allocPoint != 0 || !$.activeFarm[_pair], ApexErrors.ZERO_AMOUNT());
-        // seal old emission weights before changing the shared denominator
-        classicChef.massUpdatePools();
-        $.clMasterChef.massUpdatePools();
-        classicChef.setPoolAllocPoint(_pair, _allocPoint);
-        $.totalAllocPoint = $.totalAllocPoint - $.farmAllocPoint[_pair] + _allocPoint;
-        $.farmAllocPoint[_pair] = _allocPoint;
-        factory.setPairProtocolFee(_pair, CLASSIC_FARM_PROTOCOL_FEE);
-        factory.setPairFeeReceiver(_pair, feeReceiver);
-        $.activeFarm[_pair] = true;
-
-        emit ClassicFarmActivated(_pair, _allocPoint, feeReceiver);
+        ApexControllerFeePolicy.activateClassicFarm(_pair, _allocPoint);
     }
 
     function deactivateClassicFarm(address _pair) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        ApexControllerStorage.Layout storage $ = ApexControllerStorage.layout();
-        require($.registeredFarm[_pair], ApexErrors.INVALID_POOL(_pair));
-
-        IClassicFactory factory = $.classicFactory;
-        IClassicChef classicChef = $.classicChef;
-        require(
-            $.farmAllocPoint[_pair] != $.totalAllocPoint || $.latestPeriodEndTime <= block.timestamp
-                || $.latestPeriodRewardPerSecond == 0,
-            ApexErrors.ZERO_AMOUNT()
-        );
-        // seal old emission weights before changing the shared denominator
-        classicChef.massUpdatePools();
-        $.clMasterChef.massUpdatePools();
-        classicChef.setPoolAllocPoint(_pair, 0);
-        $.totalAllocPoint -= $.farmAllocPoint[_pair];
-        $.farmAllocPoint[_pair] = 0;
-        factory.setPairProtocolFee(_pair, factory.protocolFee());
-        factory.setPairFeeReceiver(_pair, factory.feeReceiver());
-        $.activeFarm[_pair] = false;
-
-        emit ClassicFarmDeactivated(_pair);
+        ApexControllerFeePolicy.deactivateClassicFarm(_pair);
     }
 
     function registerCLFarm(address _pool) external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -282,55 +314,11 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
     }
 
     function activateCLFarm(address _pool, uint256 _allocPoint) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_pool != address(0), ApexErrors.ZERO_ADDRESS());
-        ApexControllerStorage.Layout storage $ = ApexControllerStorage.layout();
-        ICLMasterChef clMasterChef = $.clMasterChef;
-        require(address(clMasterChef) != address(0), ApexErrors.ZERO_ADDRESS());
-        ICLFactory factory = _canonicalCLFactory(_pool);
-        if (!$.registeredFarm[_pool]) {
-            address lmPoolDeployer = clMasterChef.lmPoolDeployer();
-            require(lmPoolDeployer != address(0), ApexErrors.ZERO_ADDRESS());
-            factory.setLmPoolDeployer(lmPoolDeployer);
-            clMasterChef.addPool(_pool, 0);
-            $.registeredFarm[_pool] = true;
-            $.clFarms.add(_pool);
-            emit CLFarmRegistered(address(factory), _pool);
-        }
-        require(_allocPoint != 0 || !$.activeFarm[_pool], ApexErrors.ZERO_AMOUNT());
-        // seal old emission weights before changing the shared denominator
-        $.classicChef.massUpdatePools();
-        clMasterChef.massUpdatePools();
-        clMasterChef.setPoolAllocPoint(_pool, _allocPoint);
-        $.totalAllocPoint = $.totalAllocPoint - $.farmAllocPoint[_pool] + _allocPoint;
-        $.farmAllocPoint[_pool] = _allocPoint;
-        factory.setFeeProtocol(_pool, CL_FARM_PROTOCOL_FEE, CL_FARM_PROTOCOL_FEE);
-        $.activeFarm[_pool] = true;
-
-        emit CLFarmActivated(address(factory), _pool, _allocPoint);
+        ApexControllerFeePolicy.activateCLFarm(_pool, _allocPoint);
     }
 
     function deactivateCLFarm(address _pool) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        ApexControllerStorage.Layout storage $ = ApexControllerStorage.layout();
-        require($.registeredFarm[_pool], ApexErrors.INVALID_POOL(_pool));
-        ICLFactory factory = _canonicalCLFactory(_pool);
-
-        ICLMasterChef clMasterChef = $.clMasterChef;
-        require(
-            $.farmAllocPoint[_pool] != $.totalAllocPoint || $.latestPeriodEndTime <= block.timestamp
-                || $.latestPeriodRewardPerSecond == 0,
-            ApexErrors.ZERO_AMOUNT()
-        );
-        // seal old emission weights before changing the shared denominator
-        $.classicChef.massUpdatePools();
-        clMasterChef.massUpdatePools();
-        clMasterChef.setPoolAllocPoint(_pool, 0);
-        $.totalAllocPoint -= $.farmAllocPoint[_pool];
-        $.farmAllocPoint[_pool] = 0;
-        uint32 protocolFee = clGlobalProtocolFee();
-        factory.setFeeProtocol(_pool, protocolFee, protocolFee);
-        $.activeFarm[_pool] = false;
-
-        emit CLFarmDeactivated(address(factory), _pool);
+        ApexControllerFeePolicy.deactivateCLFarm(_pool);
     }
 
     function setLmPoolDeployer(address _lmPoolDeployer) external onlyRole(DEFAULT_ADMIN_ROLE) {

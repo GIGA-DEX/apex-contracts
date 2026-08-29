@@ -6,12 +6,14 @@ import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol"
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
 import {FeeReceiver} from "./FeeReceiver.sol";
 import {IApexController} from "./interfaces/IApexController.sol";
 import {IClassicPool} from "./interfaces/IClassicPool.sol";
+import {ICLPool} from "./interfaces/ICLPool.sol";
 import {IFeeCenter} from "./interfaces/IFeeCenter.sol";
 import {ApexErrors} from "./libraries/common/ApexErrors.sol";
 import {FeeCenterStorage} from "./storage/FeeCenterStorage.sol";
@@ -27,6 +29,21 @@ contract FeeCenter is IFeeCenter, IBeacon, Initializable, ReentrancyGuardUpgrade
     event FeesSplit(address indexed token, uint256 amount);
     event ReceiverFeesSplit(address indexed token, address indexed receiver, uint256 amount);
     event ClassicFeesRealized(address indexed pair, uint256 liquidity, uint256 amount0, uint256 amount1);
+    event CreatorFeeConfigSet(address indexed pool, address indexed recipient, uint16 feeBps, uint8 indexed poolKind);
+    event CreatorFeesPaid(
+        address indexed pool,
+        address indexed recipient,
+        address indexed token0,
+        uint256 amount0,
+        address token1,
+        uint256 amount1
+    );
+
+    uint256 private constant BPS = 10_000;
+    uint256 private constant CLASSIC_PROTOCOL_FEE_DENOMINATOR = 1_000_000;
+    uint256 private constant CL_PROTOCOL_FEE_DENOMINATOR = 10_000;
+    uint8 private constant POOL_KIND_CLASSIC = 0;
+    uint8 private constant POOL_KIND_CL = 1;
 
     constructor() {
         _disableInitializers();
@@ -129,6 +146,27 @@ contract FeeCenter is IFeeCenter, IBeacon, Initializable, ReentrancyGuardUpgrade
         }
     }
 
+    function setCreatorFeeConfig(address _pool, address _recipient, uint16 _feeBps, uint8 _poolKind)
+        external
+        onlyApexController
+    {
+        require(_pool != address(0), ApexErrors.ZERO_ADDRESS());
+        require(_poolKind <= POOL_KIND_CL, ApexErrors.INVALID_ASSORTMENT());
+        require(_feeBps <= BPS, ApexErrors.FEE_TOO_HIGH());
+
+        FeeCenterStorage.Layout storage s = FeeCenterStorage.layout();
+        if (_feeBps == 0) {
+            require(_recipient == address(0), ApexErrors.INVALID_ASSORTMENT());
+            delete s.creatorFeeConfigs[_pool];
+        } else {
+            require(_recipient != address(0), ApexErrors.ZERO_ADDRESS());
+            s.creatorFeeConfigs[_pool] =
+                FeeCenterStorage.CreatorFeeConfig({recipient: _recipient, feeBps: _feeBps, poolKind: _poolKind});
+        }
+
+        emit CreatorFeeConfigSet(_pool, _recipient, _feeBps, _poolKind);
+    }
+
     function realizeClassicFees(address _pair)
         external
         onlyApexController
@@ -142,7 +180,39 @@ contract FeeCenter is IFeeCenter, IBeacon, Initializable, ReentrancyGuardUpgrade
         IERC20(_pair).safeTransfer(_pair, liquidity);
         (amount0, amount1) = IClassicPool(_pair).burn(address(this));
 
+        FeeCenterStorage.CreatorFeeConfig memory config = FeeCenterStorage.layout().creatorFeeConfigs[_pair];
+        if (config.recipient != address(0)) {
+            require(config.poolKind == POOL_KIND_CLASSIC, ApexErrors.INVALID_POOL(_pair));
+            IClassicPool pair = IClassicPool(_pair);
+            uint256 creatorAmount0 =
+                _creatorShare(amount0, config.feeBps, pair.protocolFee(), CLASSIC_PROTOCOL_FEE_DENOMINATOR);
+            uint256 creatorAmount1 =
+                _creatorShare(amount1, config.feeBps, pair.protocolFee(), CLASSIC_PROTOCOL_FEE_DENOMINATOR);
+            if (creatorAmount0 != 0) IERC20(pair.token0()).safeTransfer(config.recipient, creatorAmount0);
+            if (creatorAmount1 != 0) IERC20(pair.token1()).safeTransfer(config.recipient, creatorAmount1);
+            emit CreatorFeesPaid(_pair, config.recipient, pair.token0(), creatorAmount0, pair.token1(), creatorAmount1);
+        }
+
         emit ClassicFeesRealized(_pair, liquidity, amount0, amount1);
+    }
+
+    function distributeCLCreatorFees(
+        address _pool,
+        uint128 _amount0,
+        uint128 _amount1,
+        uint32 _feeProtocol0,
+        uint32 _feeProtocol1
+    ) external onlyApexController nonReentrant returns (uint256 creatorAmount0, uint256 creatorAmount1) {
+        FeeCenterStorage.CreatorFeeConfig memory config = FeeCenterStorage.layout().creatorFeeConfigs[_pool];
+        if (config.recipient == address(0)) return (0, 0);
+        require(config.poolKind == POOL_KIND_CL, ApexErrors.INVALID_POOL(_pool));
+
+        creatorAmount0 = _creatorShare(_amount0, config.feeBps, _feeProtocol0, CL_PROTOCOL_FEE_DENOMINATOR);
+        creatorAmount1 = _creatorShare(_amount1, config.feeBps, _feeProtocol1, CL_PROTOCOL_FEE_DENOMINATOR);
+        ICLPool pool = ICLPool(_pool);
+        if (creatorAmount0 != 0) IERC20(pool.token0()).safeTransfer(config.recipient, creatorAmount0);
+        if (creatorAmount1 != 0) IERC20(pool.token1()).safeTransfer(config.recipient, creatorAmount1);
+        emit CreatorFeesPaid(_pool, config.recipient, pool.token0(), creatorAmount0, pool.token1(), creatorAmount1);
     }
 
     function executeReceiverSwap(
@@ -237,9 +307,26 @@ contract FeeCenter is IFeeCenter, IBeacon, Initializable, ReentrancyGuardUpgrade
         return FeeCenterStorage.layout().isSwapper[_swapper];
     }
 
+    function creatorFeeConfig(address _pool) external view returns (CreatorFeeConfig memory config) {
+        FeeCenterStorage.CreatorFeeConfig memory stored = FeeCenterStorage.layout().creatorFeeConfigs[_pool];
+        config = CreatorFeeConfig({recipient: stored.recipient, feeBps: stored.feeBps, poolKind: stored.poolKind});
+    }
+
     // Beacon compatibility: FeeReceiver BeaconProxy instances call this through the FeeCenter proxy.
     // Never remove this function or change its meaning during FeeCenter upgrades.
     function implementation() external view override returns (address) {
         return FeeCenterStorage.layout().implementation;
+    }
+
+    function _creatorShare(uint256 _amount, uint16 _feeBps, uint256 _protocolFee, uint256 _protocolFeeDenominator)
+        private
+        pure
+        returns (uint256)
+    {
+        if (_amount == 0) return 0;
+        uint256 creatorNumerator = uint256(_feeBps) * _protocolFeeDenominator;
+        uint256 protocolDenominator = _protocolFee * BPS;
+        require(creatorNumerator <= protocolDenominator, ApexErrors.INVALID_PROTOCOL_FEE());
+        return Math.mulDiv(_amount, creatorNumerator, protocolDenominator);
     }
 }

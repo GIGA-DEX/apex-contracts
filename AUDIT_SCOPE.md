@@ -5,11 +5,11 @@
 | Item | Value |
 | --- | --- |
 | Repository | `https://github.com/GIGA-DEX/apex-contracts` |
-| Source tree | `c927e629b13364f74972fca22e007b90b1ff1d18` |
-| Full-review scope | 16 files / 2,370 Solidity code lines |
+| Source tree | `af289dce21d2efb13b7c22ac6ee3c3b5624a0659` |
+| Full-review scope | 16 files / 2,754 Solidity code lines |
 | Fork-delta scope | 13 files; Apex semantic deltas only |
 
-The commercial review baseline is **2,370 full-review LoC plus the Apex semantic
+The commercial review baseline is **2,754 full-review LoC plus the Apex semantic
 deltas identified below**. The complete size of a fork-derived file is not part
 of the full-review LoC merely because that file contains an Apex change.
 
@@ -21,23 +21,23 @@ the fork-delta scope.
 
 | File | Code LoC |
 | --- | ---: |
-| `src/core/ApexController.sol` | 619 |
+| `src/core/ApexController.sol` | 609 |
 | `src/core/ApexToken.sol` | 12 |
 | `src/core/ApexVault.sol` | 642 |
 | `src/core/EmissionCenter.sol` | 25 |
-| `src/core/FeeCenter.sol` | 195 |
+| `src/core/FeeCenter.sol` | 273 |
 | `src/core/FeeReceiver.sol` | 95 |
-| `src/core/libraries/ApexControllerFeePolicy.sol` | 116 |
-| `src/core/storage/ApexControllerStorage.sol` | 42 |
+| `src/core/libraries/ApexControllerFeePolicy.sol` | 415 |
+| `src/core/storage/ApexControllerStorage.sol` | 53 |
 | `src/core/storage/ApexVaultStorage.sol` | 48 |
-| `src/core/storage/FeeCenterStorage.sol` | 20 |
+| `src/core/storage/FeeCenterStorage.sol` | 26 |
 | `src/core/storage/FeeReceiverStorage.sol` | 15 |
 | `src/core/storage/VeApexTokenStorage.sol` | 48 |
 | `src/periphery/MixedQuoter.sol` | 183 |
 | `src/periphery/SimplePositionDescriptor.sol` | 25 |
 | `src/periphery/SmartRouter.sol` | 266 |
 | `src/periphery/libraries/MixedRoute.sol` | 19 |
-| **Total** | **2,370** |
+| **Total** | **2,754** |
 
 ## Fork-Delta Files
 

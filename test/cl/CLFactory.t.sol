@@ -7,6 +7,7 @@ import {Test} from "forge-std/Test.sol";
 import {ApexController} from "../../src/core/ApexController.sol";
 import {ClassicFactory} from "../../src/core/ClassicFactory.sol";
 import {IApexController} from "../../src/core/interfaces/IApexController.sol";
+import {IFeeCenter} from "../../src/core/interfaces/IFeeCenter.sol";
 import {ApexErrors} from "../../src/core/libraries/common/ApexErrors.sol";
 import {PoolAddress} from "../../src/periphery/libraries/PoolAddress.sol";
 
@@ -52,11 +53,21 @@ contract ApexProtocolMock {
     address public immutable rewardToken;
     address public immutable apexController;
     address public immutable vault;
+    mapping(address pool => IFeeCenter.CreatorFeeConfig config) internal _creatorFeeConfigs;
 
     constructor(address _rewardToken, address _apexController) {
         rewardToken = _rewardToken;
         apexController = _apexController;
         vault = address(this);
+    }
+
+    function setCreatorFeeConfig(address pool, address recipient, uint16 feeBps, uint8 poolKind) external {
+        _creatorFeeConfigs[pool] =
+            IFeeCenter.CreatorFeeConfig({recipient: recipient, feeBps: feeBps, poolKind: poolKind});
+    }
+
+    function creatorFeeConfig(address pool) external view returns (IFeeCenter.CreatorFeeConfig memory config) {
+        return _creatorFeeConfigs[pool];
     }
 }
 
@@ -185,6 +196,27 @@ contract CLFactoryTest is Test {
         (,,,,, uint32 feeProtocol,) = ICLPoolHarness(pool).slot0();
         assertEq(feeProtocol % 65_536, 10_000);
         assertEq(feeProtocol >> 16, 10_000);
+    }
+
+    function testApexControllerCreatesAndRegistersLauncherPoolThroughCanonicalFactory() public {
+        (ApexController controller, ICLFactoryHarness controllerFactory) =
+            _deployControllerAndFactory(address(this), address(0xA9E7));
+        bytes32 agreementId = keccak256("NTROPY");
+        address recipient = address(0xC0FFEE);
+        controller.setLauncherAgreement(agreementId, recipient, 500, true);
+        controller.setLauncherCaller(address(this), agreementId, controller.LAUNCHER_PERMISSION_CL());
+
+        address pool = controller.createLauncherCLPool(tokenA, tokenB, 3000, SQRT_PRICE_1_1);
+
+        assertEq(controllerFactory.getPool(tokenA, tokenB, 3000), pool);
+        (,,,,, uint32 feeProtocol,) = ICLPoolHarness(pool).slot0();
+        assertEq(feeProtocol % 65_536, 2_000);
+        assertEq(feeProtocol >> 16, 2_000);
+        ApexProtocolMock feeCenter = ApexProtocolMock(controller.feeCenter());
+        IFeeCenter.CreatorFeeConfig memory config = feeCenter.creatorFeeConfig(pool);
+        assertEq(config.recipient, recipient);
+        assertEq(config.feeBps, 500);
+        assertEq(config.poolKind, uint8(IApexController.PoolKind.CL));
     }
 
     function testApexControllerRejectsNonCanonicalCLProtocolFeeOverride() public {

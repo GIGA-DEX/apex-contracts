@@ -2,7 +2,7 @@
 
 This file records the intended architecture, intentional product deltas, and known accepted caveats for the Apex audit scope. The project generally preserves compatibility with established upstream designs where practical, especially in the Pancake-style CL stack and periphery.
 
-Last reconciled for audit: 2026-08-14 against contract source tree `c927e629b13364f74972fca22e007b90b1ff1d18`. The immutable repository handoff commit is recorded separately so this document does not attempt to self-reference its own commit hash.
+Last reconciled for audit: 2026-08-29 against contract source tree `af289dce21d2efb13b7c22ac6ee3c3b5624a0659`. The immutable repository handoff commit is recorded separately so this document does not attempt to self-reference its own commit hash.
 
 This is triage context, not a request to suppress independent validation. Auditors should verify every developer response against the reviewed source. The public auditor mirror contains `src`, non-deployment tests, vendored libraries, and this file. Deployment configuration, broadcast records, signing operations, and private release automation are outside that public mirror unless supplied separately.
 
@@ -116,6 +116,17 @@ All Apex-owned transparent-upgradeable contracts keep mutable project state behi
 - Swaps execute arbitrary calldata only against Safe-approved target contracts. The receiver grants that target an exact temporary input-token allowance, clears it after the call, and verifies actual input spent and output received against a nonzero minimum.
 - Receiver output tokens are notified into the Vault as claimable reward streams, or as compound streams when the receiver output token is the underlying APEX lock token.
 - `FeeCenter` intentionally also serves as the `IBeacon` for `FeeReceiver` `BeaconProxy` instances to avoid an extra deployment contract. The final `implementation()` view in `FeeCenter` is beacon compatibility surface and must not be removed or repurposed during FeeCenter upgrades. Regression tests verify existing receivers still resolve after a FeeCenter implementation upgrade.
+
+### Launcher creator fees
+
+- `DEFAULT_ADMIN_ROLE` defines generic launcher agreements by ID with a fixed recipient, gross creator-fee bps, and active flag, then separately authorizes caller contracts for Classic creation, CL creation, or both. Authorized callers cannot choose the recipient or percentage.
+- Launcher entrypoints create only new pools through the controller's configured canonical Classic or CL factory. Existing pools cannot be registered retroactively. CL creation also initializes the starting price in the same transaction.
+- Agreement terms are snapshotted per pool in `FeeCenter`; later agreement edits affect future pools only. Different launchers can therefore retain independent recipients and rates concurrently.
+- Creator fees are a percentage of gross swap fees, paid in both pool tokens out of the protocol-fee portion. The creator rate cannot exceed either token's active protocol share. At the default ungauged 20% protocol share, a 5% creator agreement leaves 15% of gross fees for normal FeeCenter routing and 80% for LPs. At the gauged 100% protocol share, it leaves 95% for FeeCenter and 0% for LP swap-fee accrual under the existing farm policy.
+- Classic protocol fees still crystallize lazily as LP tokens. Permissionless creator-pool collection mints pending fee LP, burns FeeCenter-held fee LP into both underlying tokens, pays the snapshotted creator, and leaves the remainder in FeeCenter. CL collection sends the factory-collected protocol amounts to FeeCenter, pays the creator proportionally, and leaves the remainder in FeeCenter.
+- Creator-pool recipients are fixed by stored configuration; permissionless collectors cannot redirect payment. Classic creator pools cannot redirect their fee receiver away from FeeCenter.
+- Fee/protocol-fee overrides, farm activation/deactivation, and creator-term rotation settle accrued creator fees under the old regime before changing it. Creator configuration survives farm activation and deactivation.
+- Upgrade storage additions are append-only inside the existing `apex.controller.storage.v1` and `apex.fee.center.storage.v1` namespaces: two controller mappings and one FeeCenter mapping. Existing field order and types are unchanged.
 
 ## Finding Disposition
 
