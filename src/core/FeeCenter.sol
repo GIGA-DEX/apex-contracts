@@ -28,6 +28,7 @@ contract FeeCenter is IFeeCenter, IBeacon, Initializable, ReentrancyGuardUpgrade
     event SwapperSet(address indexed swapper, bool indexed status);
     event FeesSplit(address indexed token, uint256 amount);
     event ReceiverFeesSplit(address indexed token, address indexed receiver, uint256 amount);
+    event WeightedFeesPushed(address[] receivers, uint16[] weightsBps);
     event ClassicFeesRealized(address indexed pair, uint256 liquidity, uint256 amount0, uint256 amount1);
     event CreatorFeeConfigSet(address indexed pool, address indexed recipient, uint16 feeBps, uint8 indexed poolKind);
     event CreatorFeesPaid(
@@ -143,6 +144,84 @@ contract FeeCenter is IFeeCenter, IBeacon, Initializable, ReentrancyGuardUpgrade
             }
 
             emit FeesSplit(token, amount);
+        }
+    }
+
+    /// @notice Splits every held token across a caller-selected subset of active receivers.
+    /// @dev No weights are stored. Each call is independently validated and fully observable through events.
+    function pushAndSplitFeesWeighted(
+        address[] calldata _tokens,
+        address[] calldata _receivers,
+        uint16[] calldata _weightsBps
+    ) external onlyApexController {
+        FeeCenterStorage.Layout storage s = FeeCenterStorage.layout();
+        uint256 receiverCount = _receivers.length;
+        require(receiverCount != 0 && receiverCount == _weightsBps.length, ApexErrors.INVALID_ASSORTMENT());
+
+        uint256 totalWeight;
+        for (uint256 i; i < receiverCount; ++i) {
+            address receiver = _receivers[i];
+            uint16 weight = _weightsBps[i];
+            require(receiver != address(0), ApexErrors.ZERO_ADDRESS());
+            require(weight != 0, ApexErrors.ZERO_AMOUNT());
+            require(s.activeReceivers.contains(receiver), ApexErrors.NOT_AUTHORIZED(receiver));
+            for (uint256 j; j < i; ++j) {
+                require(receiver != _receivers[j], ApexErrors.INVALID_ASSORTMENT());
+            }
+            totalWeight += weight;
+        }
+        require(totalWeight == BPS, ApexErrors.INVALID_ASSORTMENT());
+
+        emit WeightedFeesPushed(_receivers, _weightsBps);
+        for (uint256 i; i < _tokens.length; ++i) {
+            address token = _tokens[i];
+            require(token != address(0), ApexErrors.ZERO_ADDRESS());
+
+            uint256 amount = IERC20(token).balanceOf(address(this));
+            if (amount == 0) continue;
+
+            uint256[] memory shares = _weightedShares(amount, _weightsBps);
+            for (uint256 j; j < receiverCount; ++j) {
+                address receiver = _receivers[j];
+                uint256 share = shares[j];
+                if (share != 0) {
+                    IERC20(token).safeTransfer(receiver, share);
+                    emit ReceiverFeesSplit(token, receiver, share);
+                }
+            }
+
+            emit FeesSplit(token, amount);
+        }
+    }
+
+    /// @dev Uses largest-remainder apportionment so tiny balances are not systematically donated to the last receiver.
+    /// Ties are resolved by receiver order, making the result deterministic for a reviewed route.
+    function _weightedShares(uint256 _amount, uint16[] calldata _weightsBps)
+        private
+        pure
+        returns (uint256[] memory shares)
+    {
+        uint256 count = _weightsBps.length;
+        shares = new uint256[](count);
+        uint256[] memory remainders = new uint256[](count);
+        bool[] memory roundedUp = new bool[](count);
+        uint256 allocated;
+
+        for (uint256 i; i < count; ++i) {
+            uint256 weight = _weightsBps[i];
+            shares[i] = Math.mulDiv(_amount, weight, BPS);
+            remainders[i] = mulmod(_amount, weight, BPS);
+            allocated += shares[i];
+        }
+
+        uint256 dust = _amount - allocated;
+        for (uint256 i; i < dust; ++i) {
+            uint256 winner;
+            for (uint256 j = 1; j < count; ++j) {
+                if (!roundedUp[j] && (roundedUp[winner] || remainders[j] > remainders[winner])) winner = j;
+            }
+            ++shares[winner];
+            roundedUp[winner] = true;
         }
     }
 

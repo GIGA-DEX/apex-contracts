@@ -22,6 +22,12 @@ interface IFeeCenter {
 
     function pushAndSplitFees(address[] calldata _tokens) external;
 
+    function pushAndSplitFeesWeighted(
+        address[] calldata _tokens,
+        address[] calldata _receivers,
+        uint16[] calldata _weightsBps
+    ) external;
+
     function realizeClassicFees(address _pair) external returns (uint256 amount0, uint256 amount1);
 
     function setCreatorFeeConfig(address pool, address recipient, uint16 feeBps, uint8 poolKind) external;
