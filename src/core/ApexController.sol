@@ -618,6 +618,16 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         ApexControllerStorage.layout().feeCenter.pushAndSplitFees(_tokens);
     }
 
+    /// @notice Routes collected fees across an explicit set of active receivers using operator-selected weights.
+    /// @dev This is intended for off-chain APR equalization. Weights are validated again by FeeCenter.
+    function pushAndSplitFeesWeighted(
+        address[] calldata _tokens,
+        address[] calldata _receivers,
+        uint16[] calldata _weightsBps
+    ) external onlyRole(FEE_OPERATOR) {
+        ApexControllerStorage.layout().feeCenter.pushAndSplitFeesWeighted(_tokens, _receivers, _weightsBps);
+    }
+
     function executeFeeReceiverSwap(
         address _receiver,
         address _tokenIn,

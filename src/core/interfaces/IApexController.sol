@@ -162,6 +162,12 @@ interface IApexController {
 
     function pushAndSplitFees(address[] calldata tokens) external;
 
+    function pushAndSplitFeesWeighted(
+        address[] calldata tokens,
+        address[] calldata receivers,
+        uint16[] calldata weightsBps
+    ) external;
+
     function executeFeeReceiverSwap(
         address receiver,
         address tokenIn,

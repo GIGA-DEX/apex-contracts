@@ -1607,6 +1607,90 @@ contract ApexControllerEmissionsTest is Test {
         assertEq(feeCenter.activeReceiversLength(), 2);
     }
 
+    function testFeeCenterSplitsRawFeesUsingExplicitAprWeights() public {
+        address tokenAReceiver = controller.addFeeReceiver(address(tokenA));
+        address feeTokenReceiver = controller.addFeeReceiver(address(feeToken));
+
+        tokenB.mint(address(feeCenter), 101 ether);
+
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(tokenB);
+        address[] memory receivers = new address[](2);
+        receivers[0] = tokenAReceiver;
+        receivers[1] = feeTokenReceiver;
+        uint16[] memory weights = new uint16[](2);
+        weights[0] = 7_500;
+        weights[1] = 2_500;
+
+        controller.pushAndSplitFeesWeighted(tokens, receivers, weights);
+
+        assertEq(tokenB.balanceOf(tokenAReceiver), 75.75 ether);
+        assertEq(tokenB.balanceOf(feeTokenReceiver), 25.25 ether);
+        assertEq(tokenB.balanceOf(address(feeCenter)), 0);
+    }
+
+    function testFeeCenterWeightedSplitSupportsFourReceiversAndApportionsTinyBalances() public {
+        address[] memory receivers = new address[](4);
+        receivers[0] = controller.addFeeReceiver(address(tokenA));
+        receivers[1] = controller.addFeeReceiver(address(feeToken));
+        receivers[2] = controller.addFeeReceiver(address(apex));
+        receivers[3] = controller.addFeeReceiver(address(tokenB));
+
+        uint16[] memory weights = new uint16[](4);
+        weights[0] = 4_000;
+        weights[1] = 3_000;
+        weights[2] = 2_000;
+        weights[3] = 1_000;
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(tokenB);
+        tokenB.mint(address(feeCenter), 3);
+
+        controller.pushAndSplitFeesWeighted(tokens, receivers, weights);
+
+        assertEq(tokenB.balanceOf(receivers[0]), 1);
+        assertEq(tokenB.balanceOf(receivers[1]), 1);
+        assertEq(tokenB.balanceOf(receivers[2]), 1);
+        assertEq(tokenB.balanceOf(receivers[3]), 0);
+        assertEq(tokenB.balanceOf(address(feeCenter)), 0);
+    }
+
+    function testFeeCenterWeightedSplitRejectsInvalidReceiverSetsAndWeights() public {
+        address tokenAReceiver = controller.addFeeReceiver(address(tokenA));
+        address feeTokenReceiver = controller.addFeeReceiver(address(feeToken));
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(tokenB);
+        address[] memory receivers = new address[](2);
+        receivers[0] = tokenAReceiver;
+        receivers[1] = feeTokenReceiver;
+        uint16[] memory weights = new uint16[](2);
+        weights[0] = 6_000;
+        weights[1] = 3_999;
+
+        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
+        controller.pushAndSplitFeesWeighted(tokens, receivers, weights);
+
+        weights[0] = 10_000;
+        weights[1] = 0;
+        vm.expectRevert(ApexErrors.ZERO_AMOUNT.selector);
+        controller.pushAndSplitFeesWeighted(tokens, receivers, weights);
+
+        uint16[] memory shortWeights = new uint16[](1);
+        shortWeights[0] = 10_000;
+        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
+        controller.pushAndSplitFeesWeighted(tokens, receivers, shortWeights);
+
+        weights[0] = 6_000;
+        weights[1] = 4_000;
+        receivers[1] = tokenAReceiver;
+        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
+        controller.pushAndSplitFeesWeighted(tokens, receivers, weights);
+
+        receivers[1] = feeTokenReceiver;
+        controller.removeFeeReceiver(address(feeToken));
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.NOT_AUTHORIZED.selector, feeTokenReceiver));
+        controller.pushAndSplitFeesWeighted(tokens, receivers, weights);
+    }
+
     function testFeeCenterRemovesReceiverFromActiveSplits() public {
         address tokenAReceiver = controller.addFeeReceiver(address(tokenA));
         address feeTokenReceiver = controller.addFeeReceiver(address(feeToken));
