@@ -1791,6 +1791,22 @@ contract ApexControllerEmissionsTest is Test {
         controller.executeFeeReceiverSwap(receiver, address(tokenA), address(swapper), 100 ether, 90 ether, data);
     }
 
+    function testFeeReceiverSwapAlwaysRejectsGigaInput() public {
+        ApexMockSwapper swapper = new ApexMockSwapper();
+        swapper.setAmountOut(90 ether);
+        controller.setFeeSwapper(address(swapper), true);
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        apex.mint(receiver, 100 ether);
+        bytes memory data =
+            abi.encodeCall(ApexMockSwapper.swap, (address(apex), address(feeToken), 100 ether, receiver));
+
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.TOKEN_SWAP_FORBIDDEN.selector, address(apex)));
+        controller.executeFeeReceiverSwap(receiver, address(apex), address(swapper), 100 ether, 90 ether, data);
+
+        assertEq(apex.balanceOf(receiver), 100 ether);
+        assertEq(apex.allowance(receiver, address(swapper)), 0);
+    }
+
     function testFeeReceiverSwapRejectsCallerWithoutOperatorRole() public {
         ApexMockSwapper swapper = new ApexMockSwapper();
         swapper.setAmountOut(90 ether);

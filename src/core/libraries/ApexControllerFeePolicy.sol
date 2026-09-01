@@ -363,8 +363,9 @@ library ApexControllerFeePolicy {
         uint256 minAmountOut,
         bytes calldata data
     ) external returns (uint256 spent, uint256 received) {
-        return ApexControllerStorage.layout().feeCenter
-            .executeReceiverSwap(receiver, tokenIn, target, amount, minAmountOut, data);
+        ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
+        require(tokenIn != address(s.rewardToken), ApexErrors.TOKEN_SWAP_FORBIDDEN(tokenIn));
+        return s.feeCenter.executeReceiverSwap(receiver, tokenIn, target, amount, minAmountOut, data);
     }
 
     function setLmPoolDeployer(address lmPoolDeployer) external {

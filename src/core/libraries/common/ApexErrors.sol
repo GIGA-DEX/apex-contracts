@@ -8,6 +8,7 @@ library ApexErrors {
     error INVALID_DURATION();
     error INVALID_POOL(address pool);
     error INVALID_TARGET(address target);
+    error TOKEN_SWAP_FORBIDDEN(address token);
     error FARM_INACTIVE(address pool);
     error FARM_ACTIVE(address pool);
     error LENGTH_MISMATCH();
