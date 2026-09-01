@@ -185,6 +185,10 @@ interface IApexController {
 
     function notifyFeeReceiverVaultCompoundBalance(address receiver) external returns (uint256 amount);
 
+    function notifyFeeReceiverVaultBalances(address[] calldata receivers, bool[] calldata isCompound)
+        external
+        returns (uint256[] memory amounts);
+
     function rescueFeeReceiverToken(address receiver, address token, address to, uint256 amount) external;
 
     function isFarmRegistered(address pool) external view returns (bool);

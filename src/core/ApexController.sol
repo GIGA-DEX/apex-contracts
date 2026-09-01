@@ -661,6 +661,30 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         return ApexControllerStorage.layout().feeCenter.notifyReceiverVaultCompoundBalance(_receiver);
     }
 
+    /// @notice Notifies multiple receiver balances atomically so every included vault stream shares a period finish.
+    /// @param _receivers Active fee receivers with nonzero output balances.
+    /// @param _isCompound Whether each receiver feeds the compound bucket instead of a reward-token bucket.
+    function notifyFeeReceiverVaultBalances(address[] calldata _receivers, bool[] calldata _isCompound)
+        external
+        onlyRole(FEE_OPERATOR)
+        returns (uint256[] memory amounts)
+    {
+        uint256 count = _receivers.length;
+        require(count != 0 && count == _isCompound.length, ApexErrors.INVALID_ASSORTMENT());
+        amounts = new uint256[](count);
+        IFeeCenter receiverCenter = ApexControllerStorage.layout().feeCenter;
+        for (uint256 i; i < count; ++i) {
+            for (uint256 j; j < i; ++j) {
+                require(_receivers[i] != _receivers[j], ApexErrors.INVALID_ASSORTMENT());
+            }
+        }
+        for (uint256 i; i < count; ++i) {
+            amounts[i] = _isCompound[i]
+                ? receiverCenter.notifyReceiverVaultCompoundBalance(_receivers[i])
+                : receiverCenter.notifyReceiverVaultBalance(_receivers[i]);
+        }
+    }
+
     function rescueFeeReceiverToken(address _receiver, address _token, address _to, uint256 _amount)
         external
         onlyRole(DEFAULT_ADMIN_ROLE)

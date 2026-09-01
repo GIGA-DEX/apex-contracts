@@ -1780,6 +1780,59 @@ contract ApexControllerEmissionsTest is Test {
         assertEq(feeToken.balanceOf(address(vault)), 90 ether);
     }
 
+    function testFeeReceiverCanNotifyMultipleVaultBalancesAtomically() public {
+        controller.setVaultRewardToken(address(tokenA), true);
+        veNFT.mint(alice, 1, 100 ether);
+        ApexVault.UserConfig[] memory configs = new ApexVault.UserConfig[](2);
+        configs[0] = ApexVault.UserConfig({rewardToken: address(feeToken), bps: 3_000});
+        configs[1] = ApexVault.UserConfig({rewardToken: address(tokenA), bps: 3_000});
+        vm.startPrank(alice);
+        veNFT.approve(address(vault), 1);
+        vault.stake(1, configs, 4_000);
+        vm.stopPrank();
+
+        address compoundReceiver = controller.addFeeReceiver(address(apex));
+        address feeReceiver = controller.addFeeReceiver(address(feeToken));
+        address tokenAReceiver = controller.addFeeReceiver(address(tokenA));
+        apex.mint(compoundReceiver, 30 ether);
+        feeToken.mint(feeReceiver, 20 ether);
+        tokenA.mint(tokenAReceiver, 10 ether);
+
+        address[] memory receivers = new address[](3);
+        receivers[0] = compoundReceiver;
+        receivers[1] = feeReceiver;
+        receivers[2] = tokenAReceiver;
+        bool[] memory isCompound = new bool[](3);
+        isCompound[0] = true;
+
+        uint256[] memory amounts = controller.notifyFeeReceiverVaultBalances(receivers, isCompound);
+        assertEq(amounts[0], 30 ether);
+        assertEq(amounts[1], 20 ether);
+        assertEq(amounts[2], 10 ether);
+        (, uint256 compoundFinish,,,) = vault.rewardData(address(veNFT));
+        (, uint256 feeFinish,,,) = vault.rewardData(address(feeToken));
+        (, uint256 tokenAFinish,,,) = vault.rewardData(address(tokenA));
+        assertEq(compoundFinish, feeFinish);
+        assertEq(feeFinish, tokenAFinish);
+    }
+
+    function testFeeReceiverBatchNotificationRejectsInvalidAssortments() public {
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        address[] memory receivers = new address[](1);
+        receivers[0] = receiver;
+        bool[] memory compounds = new bool[](0);
+        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
+        controller.notifyFeeReceiverVaultBalances(receivers, compounds);
+
+        feeToken.mint(receiver, 2 ether);
+        receivers = new address[](2);
+        receivers[0] = receiver;
+        receivers[1] = receiver;
+        compounds = new bool[](2);
+        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
+        controller.notifyFeeReceiverVaultBalances(receivers, compounds);
+    }
+
     function testFeeReceiverSwapRejectsUnapprovedTarget() public {
         ApexMockSwapper swapper = new ApexMockSwapper();
         address receiver = controller.addFeeReceiver(address(feeToken));
