@@ -367,6 +367,224 @@ contract ApexControllerEmissionsTest is Test {
         classicPair = classicFactory.createPair(address(tokenA), address(tokenB), false);
     }
 
+    function testAssignCreatorFeesCLSettlesOldFeesAndPreservesPoolState() public {
+        clPool.initialize(1 << 96);
+        controller.overrideCLProtocolFee(address(clPool), 300, 300);
+        clPool.seedProtocolFees(3 ether, 6 ether);
+        controller.assignCreatorFees(address(clPool), alice, 1500);
+        assertEq(tokenA.balanceOf(alice), 0);
+        assertEq(tokenB.balanceOf(alice), 0);
+        assertEq(tokenA.balanceOf(address(feeCenter)) + tokenB.balanceOf(address(feeCenter)), 9 ether);
+        (uint160 price,,,,, uint32 packed,) = clPool.slot0();
+        assertEq(price, 1 << 96);
+        assertEq(uint16(packed), 1800);
+        assertEq(packed >> 16, 1800);
+        (address launcher,,, uint16 base,, bool gauged) = controller.launcherPoolConfig(address(clPool));
+        assertEq(launcher, address(0));
+        assertEq(base, 300);
+        assertFalse(gauged);
+        assertEq(controller.launchers(false).length, 0);
+        assertEq(controller.launcherPoolsByLauncher(alice).length, 0);
+        assertEq(controller.launcherPools().length, 1);
+        assertEq(controller.registeredCLFarmsLength(), 0);
+
+        clPool.seedProtocolFees(18 ether, 36 ether);
+        vm.prank(bob);
+        controller.collectLauncherCLProtocolFees(address(clPool));
+        assertEq(ApexEmissionMockERC20(clPool.token0()).balanceOf(alice), 15 ether);
+        assertEq(ApexEmissionMockERC20(clPool.token1()).balanceOf(alice), 30 ether);
+        vm.prank(alice);
+        vm.expectRevert();
+        controller.createLauncherCLPool(address(tokenA), address(feeToken), 3000, 1 << 96);
+    }
+
+    function testAssignCreatorFeesRotationAndRemovalSettlePreviousRecipient() public {
+        clPool.initialize(1 << 96);
+        controller.assignCreatorFees(address(clPool), alice, 1500);
+        clPool.seedProtocolFees(25 ether, 50 ether);
+        controller.assignCreatorFees(address(clPool), bob, 500);
+        assertEq(ApexEmissionMockERC20(clPool.token0()).balanceOf(alice), 15 ether);
+        clPool.seedProtocolFees(15 ether, 30 ether);
+        controller.assignCreatorFees(address(clPool), address(0), 0);
+        assertEq(ApexEmissionMockERC20(clPool.token0()).balanceOf(bob), 5 ether);
+        assertEq(feeCenter.creatorFeeConfig(address(clPool)).recipient, address(0));
+        assertEq(uint16(clPool.feeProtocol()), 1000);
+        assertEq(controller.launcherPools().length, 1);
+        clPool.seedProtocolFees(10 ether, 20 ether);
+        controller.collectLauncherCLProtocolFees(address(clPool));
+        assertEq(ApexEmissionMockERC20(clPool.token0()).balanceOf(bob), 5 ether);
+    }
+
+    function testAssignCreatorFeesOnlyAdminIncludingAuthorizedLaunchers() public {
+        controller.configureLauncher(alice, bob, 500, 1500, false, IApexController.LauncherPermission.BOTH, true);
+        vm.prank(alice);
+        vm.expectRevert();
+        controller.assignCreatorFees(classicPair, bob, 1500);
+        controller.grantRole(controller.FEE_OPERATOR(), bob);
+        vm.prank(bob);
+        vm.expectRevert();
+        controller.assignCreatorFees(classicPair, bob, 1500);
+    }
+
+    function testAssignCreatorFeesRejectsInvalidPoolsAndSplits() public {
+        vm.expectRevert();
+        controller.assignCreatorFees(address(0), alice, 1500);
+        vm.expectRevert();
+        controller.assignCreatorFees(address(tokenA), alice, 1500);
+        vm.expectRevert();
+        controller.assignCreatorFees(address(clPool), alice, 1500); // uninitialized
+        clPool.initialize(1 << 96);
+        ApexMockCLPool fake = new ApexMockCLPool(address(clFactory), clPool.token0(), clPool.token1(), clPool.fee());
+        fake.initialize(1 << 96);
+        vm.expectRevert();
+        controller.assignCreatorFees(address(fake), alice, 1500);
+        vm.expectRevert(ApexErrors.ZERO_ADDRESS.selector);
+        controller.assignCreatorFees(address(clPool), address(0), 1);
+        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
+        controller.assignCreatorFees(address(clPool), alice, 0);
+        vm.expectRevert(ApexErrors.FEE_TOO_HIGH.selector);
+        controller.assignCreatorFees(address(clPool), alice, 9001);
+        controller.overrideCLProtocolFee(address(clPool), 300, 500);
+        vm.expectRevert(ApexErrors.INVALID_PROTOCOL_FEE.selector);
+        controller.assignCreatorFees(address(clPool), alice, 1500);
+        assertEq(controller.launcherPools().length, 0);
+    }
+
+    function testAssignCreatorFeesPreservesLauncherAttributionAndBase() public {
+        controller.configureLauncher(alice, alice, 500, 1500, false, IApexController.LauncherPermission.CL, true);
+        vm.prank(alice);
+        address pool = controller.createLauncherCLPool(address(tokenA), address(feeToken), 3000, 1 << 96);
+        controller.assignCreatorFees(pool, bob, 1500);
+        (address launcher,,, uint16 base,,) = controller.launcherPoolConfig(pool);
+        assertEq(launcher, alice);
+        assertEq(base, 1500);
+        assertEq(uint16(ApexMockCLPool(pool).feeProtocol()), 3000);
+        assertEq(controller.launcherPoolsByLauncher(alice).length, 1);
+        assertEq(controller.launcherPoolsByLauncher(bob).length, 0);
+    }
+
+    function testAssignCreatorFeesGaugedCLPreservesAllocationAndDeactivationBase() public {
+        clPool.initialize(1 << 96);
+        controller.activateCLFarm(address(clPool), 123);
+        clPool.seedProtocolFees(100 ether, 200 ether);
+        controller.assignCreatorFees(address(clPool), alice, 1500);
+        assertTrue(controller.isFarmActive(address(clPool)));
+        assertEq(controller.totalAllocPoint(), 123);
+        assertEq(uint16(clPool.feeProtocol()), 10000);
+        assertEq(controller.activeLauncherPools().length, 1);
+        assertEq(tokenA.balanceOf(alice), 0);
+        clPool.seedProtocolFees(100 ether, 200 ether);
+        controller.collectLauncherCLProtocolFees(address(clPool));
+        assertEq(ApexEmissionMockERC20(clPool.token0()).balanceOf(alice), 15 ether);
+        controller.deactivateCLFarm(address(clPool));
+        assertEq(uint16(clPool.feeProtocol()), 3500);
+        assertEq(controller.activeLauncherPools().length, 0);
+        controller.activateCLFarm(address(clPool), 123);
+        assertEq(uint16(clPool.feeProtocol()), 10000);
+        controller.assignCreatorFees(address(clPool), address(0), 0);
+        assertEq(uint16(clPool.feeProtocol()), 10000);
+        controller.deactivateCLFarm(address(clPool));
+        assertEq(uint16(clPool.feeProtocol()), 2000);
+    }
+
+    function testAssignCreatorFeesClassicSettlesHistoricalFeesAndPaysNewShare() public {
+        _addLiquidity(classicPair, alice, 1000 ether, 1000 ether);
+        ClassicPool pair = ClassicPool(classicPair);
+        ApexEmissionMockERC20 t0 = ApexEmissionMockERC20(pair.token0());
+        t0.mint(classicPair, 100 ether);
+        pair.swap(0, pair.getAmountOut(100 ether, pair.token0()), bob, "");
+        address creator = address(0xC0FFEE);
+        controller.assignCreatorFees(classicPair, creator, 1500);
+        assertEq(t0.balanceOf(creator), 0);
+        assertGt(t0.balanceOf(address(feeCenter)), 0);
+        assertEq(pair.protocolFee(), 350000);
+        t0.mint(classicPair, 100 ether);
+        pair.swap(0, pair.getAmountOut(100 ether, pair.token0()), bob, "");
+        (uint256 amount0,) = controller.collectLauncherClassicProtocolFees(classicPair);
+        assertGt(amount0, 0);
+        assertEq(t0.balanceOf(creator), amount0 * 1500 / 3500);
+        controller.assignCreatorFees(classicPair, address(0), 0);
+        assertEq(pair.protocolFee(), 200000);
+    }
+
+    function testAssignCreatorFeesClassicRejectsExternalReceiverAndFractionalBps() public {
+        controller.overrideClassicFeeReceiver(classicPair, alice);
+        vm.expectRevert();
+        controller.assignCreatorFees(classicPair, bob, 1500);
+        controller.overrideClassicFeeReceiver(classicPair, address(feeCenter));
+        controller.overrideClassicProtocolFee(classicPair, 30001);
+        vm.expectRevert(ApexErrors.INVALID_PROTOCOL_FEE.selector);
+        controller.assignCreatorFees(classicPair, bob, 1500);
+    }
+
+    function testAssignCreatorFeesGaugedClassicPreservesAllocationAndDeactivationBase() public {
+        controller.activateClassicFarm(classicPair, 123);
+        controller.assignCreatorFees(classicPair, alice, 1500);
+        assertEq(ClassicPool(classicPair).protocolFee(), 1000000);
+        assertEq(controller.totalAllocPoint(), 123);
+        controller.deactivateClassicFarm(classicPair);
+        assertEq(ClassicPool(classicPair).protocolFee(), 350000);
+        assertEq(ClassicPool(classicPair).feeReceiver(), address(feeCenter));
+    }
+
+    function testFeeReceiverCanNotifyMultipleVaultBalancesAtomically() public {
+        controller.setVaultRewardToken(address(tokenA), true);
+        veNFT.mint(alice, 1, 100 ether);
+        ApexVault.UserConfig[] memory configs = new ApexVault.UserConfig[](2);
+        configs[0] = ApexVault.UserConfig({rewardToken: address(feeToken), bps: 3_000});
+        configs[1] = ApexVault.UserConfig({rewardToken: address(tokenA), bps: 3_000});
+        vm.startPrank(alice);
+        veNFT.approve(address(vault), 1);
+        vault.stake(1, configs, 4_000);
+        vm.stopPrank();
+
+        address compoundReceiver = controller.addFeeReceiver(address(apex));
+        address feeReceiver = controller.addFeeReceiver(address(feeToken));
+        address tokenAReceiver = controller.addFeeReceiver(address(tokenA));
+        apex.mint(compoundReceiver, 30 ether);
+        feeToken.mint(feeReceiver, 20 ether);
+        tokenA.mint(tokenAReceiver, 10 ether);
+
+        address[] memory receivers = new address[](3);
+        receivers[0] = compoundReceiver;
+        receivers[1] = feeReceiver;
+        receivers[2] = tokenAReceiver;
+        bool[] memory isCompound = new bool[](3);
+        isCompound[0] = true;
+
+        uint256[] memory amounts = controller.notifyFeeReceiverVaultBalances(receivers, isCompound);
+        assertEq(amounts[0], 30 ether);
+        assertEq(amounts[1], 20 ether);
+        assertEq(amounts[2], 10 ether);
+        (, uint256 compoundFinish,,,) = vault.rewardData(address(veNFT));
+        (, uint256 feeFinish,,,) = vault.rewardData(address(feeToken));
+        (, uint256 tokenAFinish,,,) = vault.rewardData(address(tokenA));
+        assertEq(compoundFinish, feeFinish);
+        assertEq(feeFinish, tokenAFinish);
+    }
+
+    function testFeeReceiverBatchNotificationRejectsInvalidAssortments() public {
+        address receiver = controller.addFeeReceiver(address(feeToken));
+        address[] memory receivers = new address[](1);
+        receivers[0] = receiver;
+        bool[] memory compounds = new bool[](0);
+        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
+        controller.notifyFeeReceiverVaultBalances(receivers, compounds);
+
+        feeToken.mint(receiver, 2 ether);
+        receivers = new address[](2);
+        receivers[0] = receiver;
+        receivers[1] = receiver;
+        compounds = new bool[](2);
+        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
+        controller.notifyFeeReceiverVaultBalances(receivers, compounds);
+    }
+
+    function testAssignmentUpgradePreservesRewardTokenSwapGuard() public {
+        vm.expectRevert(abi.encodeWithSelector(ApexErrors.TOKEN_SWAP_FORBIDDEN.selector, address(apex)));
+        controller.executeFeeReceiverSwap(address(1), address(apex), address(2), 1, 0, "");
+    }
+
     function testUngaugedProtocolFeeDefaultsAreTwentyPercent() public view {
         assertEq(controller.clGlobalProtocolFee(), 2_000);
         assertEq(classicFactory.protocolFee(), 200_000);
@@ -1778,59 +1996,6 @@ contract ApexControllerEmissionsTest is Test {
 
         assertApproxEqAbs(vault.pendingReward(1, address(feeToken)), 90 ether, 1e15);
         assertEq(feeToken.balanceOf(address(vault)), 90 ether);
-    }
-
-    function testFeeReceiverCanNotifyMultipleVaultBalancesAtomically() public {
-        controller.setVaultRewardToken(address(tokenA), true);
-        veNFT.mint(alice, 1, 100 ether);
-        ApexVault.UserConfig[] memory configs = new ApexVault.UserConfig[](2);
-        configs[0] = ApexVault.UserConfig({rewardToken: address(feeToken), bps: 3_000});
-        configs[1] = ApexVault.UserConfig({rewardToken: address(tokenA), bps: 3_000});
-        vm.startPrank(alice);
-        veNFT.approve(address(vault), 1);
-        vault.stake(1, configs, 4_000);
-        vm.stopPrank();
-
-        address compoundReceiver = controller.addFeeReceiver(address(apex));
-        address feeReceiver = controller.addFeeReceiver(address(feeToken));
-        address tokenAReceiver = controller.addFeeReceiver(address(tokenA));
-        apex.mint(compoundReceiver, 30 ether);
-        feeToken.mint(feeReceiver, 20 ether);
-        tokenA.mint(tokenAReceiver, 10 ether);
-
-        address[] memory receivers = new address[](3);
-        receivers[0] = compoundReceiver;
-        receivers[1] = feeReceiver;
-        receivers[2] = tokenAReceiver;
-        bool[] memory isCompound = new bool[](3);
-        isCompound[0] = true;
-
-        uint256[] memory amounts = controller.notifyFeeReceiverVaultBalances(receivers, isCompound);
-        assertEq(amounts[0], 30 ether);
-        assertEq(amounts[1], 20 ether);
-        assertEq(amounts[2], 10 ether);
-        (, uint256 compoundFinish,,,) = vault.rewardData(address(veNFT));
-        (, uint256 feeFinish,,,) = vault.rewardData(address(feeToken));
-        (, uint256 tokenAFinish,,,) = vault.rewardData(address(tokenA));
-        assertEq(compoundFinish, feeFinish);
-        assertEq(feeFinish, tokenAFinish);
-    }
-
-    function testFeeReceiverBatchNotificationRejectsInvalidAssortments() public {
-        address receiver = controller.addFeeReceiver(address(feeToken));
-        address[] memory receivers = new address[](1);
-        receivers[0] = receiver;
-        bool[] memory compounds = new bool[](0);
-        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
-        controller.notifyFeeReceiverVaultBalances(receivers, compounds);
-
-        feeToken.mint(receiver, 2 ether);
-        receivers = new address[](2);
-        receivers[0] = receiver;
-        receivers[1] = receiver;
-        compounds = new bool[](2);
-        vm.expectRevert(ApexErrors.INVALID_ASSORTMENT.selector);
-        controller.notifyFeeReceiverVaultBalances(receivers, compounds);
     }
 
     function testFeeReceiverSwapRejectsUnapprovedTarget() public {

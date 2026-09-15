@@ -118,6 +118,21 @@ contract VeApexTokenTest is Test {
         assertGt(veApexToken.totalSupply(), supplyBefore);
     }
 
+    function testOwnershipGuardPersistsUntilSolidityBlockNumberAdvances() public {
+        uint256 balanceBefore = veApexToken.balanceOfNFT(1);
+        assertGt(balanceBefore, 0);
+
+        vm.prank(alice);
+        veApexToken.transferFrom(alice, operator, 1);
+
+        assertEq(veApexToken.balanceOfNFT(1), 0);
+        vm.warp(block.timestamp + 1 minutes);
+        assertEq(veApexToken.balanceOfNFT(1), 0);
+
+        vm.roll(block.number + 1);
+        assertGt(veApexToken.balanceOfNFT(1), 0);
+    }
+
     function testVeApexTokenStorageSurvivesImplementationUpgrade() public {
         VeApexToken.GlobalPoint memory pointBefore = veApexToken.pointHistory(1);
         VeApexToken.UserPoint memory userPointBefore = veApexToken.userPointHistory(1, 1);

@@ -20,6 +20,7 @@ import {IFeeCenter} from "./interfaces/IFeeCenter.sol";
 import {IApexVault} from "./interfaces/IApexVault.sol";
 import {ApexErrors} from "./libraries/common/ApexErrors.sol";
 import {ApexControllerFeePolicy} from "./libraries/ApexControllerFeePolicy.sol";
+import {ApexControllerExternalFarms} from "./libraries/ApexControllerExternalFarms.sol";
 import {ApexControllerStorage} from "./storage/ApexControllerStorage.sol";
 
 interface IEmissionCenter {
@@ -47,6 +48,8 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         address feeCenter
     );
     event ClassicFarmRegistered(address indexed pair);
+    event ExternalClassicFactorySet(address indexed factory, bool allowed);
+    event ExternalClassicFarmRegistered(address indexed factory, address indexed pair);
     event ClassicFarmActivated(address indexed pair, uint256 allocPoint, address indexed feeReceiver);
     event ClassicFarmDeactivated(address indexed pair);
     event CLFarmRegistered(address indexed clFactory, address indexed pool);
@@ -75,6 +78,9 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         bool gauged
     );
     event LauncherPoolFeeSplitSet(
+        address indexed pool, address indexed recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps
+    );
+    event CreatorFeesAssigned(
         address indexed pool, address indexed recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps
     );
 
@@ -246,6 +252,22 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         );
     }
 
+    /// @notice Permissionlessly registers a new CL swap fee and its permanent global tick spacing.
+    /// @dev Factory validates fee < 1_000_000, spacing in 1..16383, and that the fee is unused.
+    function enableCLFeeAmount(uint24 _fee, int24 _tickSpacing) external {
+        ICLFactory factory = ApexControllerStorage.layout().clFactory;
+        require(address(factory) != address(0), ApexErrors.ZERO_ADDRESS());
+        factory.enableFeeAmount(_fee, _tickSpacing);
+    }
+
+    function assignCreatorFees(address _pool, address _recipient, uint16 _creatorFeeBps)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        nonReentrant
+    {
+        ApexControllerFeePolicy.assignCreatorFees(_pool, _recipient, _creatorFeeBps);
+    }
+
     function updateLauncherPoolFeeSplit(address _pool, address _recipient, uint16 _creatorFeeBps, uint16 _veGigaFeeBps)
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
@@ -317,6 +339,26 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
     }
 
     // farms
+    function setExternalClassicFactory(address _factory, bool _allowed) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        ApexControllerExternalFarms.setFactory(_factory, _allowed);
+    }
+
+    function registerExternalClassicFarm(address _factory, address _pair) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        ApexControllerExternalFarms.registerFarm(_factory, _pair);
+    }
+
+    function isExternalClassicFactory(address _factory) external view returns (bool) {
+        return ApexControllerStorage.layout().externalClassicFactories[_factory];
+    }
+
+    function externalClassicFarmFactory(address _pair) external view returns (address) {
+        return ApexControllerStorage.layout().externalClassicFarmFactory[_pair];
+    }
+
+    function requireExternalClassicFarmReady(address _pair) external view {
+        ApexControllerExternalFarms.requireReady(_pair);
+    }
+
     function registerClassicFarm(address _pair) external onlyRole(DEFAULT_ADMIN_ROLE) {
         ApexControllerFeePolicy.registerClassicFarm(_pair);
     }
@@ -405,6 +447,7 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
 
                 if (weight.kind == PoolKind.CLASSIC) {
                     require(hasClassicChef, ApexErrors.ZERO_ADDRESS());
+                    ApexControllerExternalFarms.requireReadyForWeight(weight.pool, weight.allocPoint);
                     classicWeight += weight.allocPoint;
                     classicChef.setPoolAllocPoint(weight.pool, weight.allocPoint);
                 } else {

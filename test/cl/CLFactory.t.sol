@@ -84,6 +84,46 @@ contract CLFactoryTest is Test {
         (factory, deployer) = _deployFactory(address(this));
     }
 
+    function testAnyoneCanEnableCustomTierAndCreatePools() public {
+        (ApexController controller, ICLFactoryHarness f) = _deployControllerAndFactory(address(this), address(0xCAFE));
+        vm.prank(address(0xBEEF));
+        controller.enableCLFeeAmount(50000, 100);
+        assertEq(f.feeAmountTickSpacing(50000), 100);
+        assertEq(f.feeAmountTickSpacing(500), 10);
+        vm.prank(address(0xABCD));
+        address pool = f.createPool(tokenA, tokenB, 50000);
+        assertEq(ICLPoolHarness(pool).fee(), 50000);
+        assertEq(ICLPoolHarness(pool).tickSpacing(), 100);
+        assertEq(f.owner(), address(controller));
+        assertEq(controller.launchers(false).length, 0);
+        assertFalse(controller.hasRole(bytes32(0), address(0xBEEF)));
+        vm.expectRevert();
+        controller.enableCLFeeAmount(50000, 1);
+        vm.expectRevert();
+        controller.enableCLFeeAmount(500, 100);
+        assertEq(f.feeAmountTickSpacing(50000), 100);
+    }
+
+    function testCustomTierRejectsInvalidParameters() public {
+        (ApexController controller,) = _deployControllerAndFactory(address(this), address(0xCAFE));
+        vm.expectRevert();
+        controller.enableCLFeeAmount(1000000, 100);
+        vm.expectRevert();
+        controller.enableCLFeeAmount(50000, 0);
+        vm.expectRevert();
+        controller.enableCLFeeAmount(50000, -1);
+        vm.expectRevert();
+        controller.enableCLFeeAmount(50000, 16384);
+    }
+
+    function testCustomTierBeforeProtocolInitializationReverts() public {
+        ApexController implementation = new ApexController();
+        ApexController controller =
+            ApexController(address(new TransparentUpgradeableProxy(address(implementation), address(this), "")));
+        vm.expectRevert(ApexErrors.ZERO_ADDRESS.selector);
+        controller.enableCLFeeAmount(50000, 100);
+    }
+
     function testCreateCLPoolFromFactory() public {
         address pool = factory.createPool(tokenA, tokenB, 500);
 

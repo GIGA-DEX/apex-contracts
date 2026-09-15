@@ -61,6 +61,9 @@ library ApexControllerStorage {
         EnumerableSet.AddressSet activeLauncherPools;
         mapping(address launcher => EnumerableSet.AddressSet pools) launcherPoolsByLauncher;
         mapping(address pool => LauncherPoolConfig config) launcherPoolConfigs;
+        // Append-only upgrade storage. External factories use the BrownFi V3 ABI.
+        mapping(address factory => bool allowed) externalClassicFactories;
+        mapping(address pair => address factory) externalClassicFarmFactory;
     }
 
     function layout() internal pure returns (Layout storage s) {

@@ -22,6 +22,10 @@ interface IVotingEscrow {
 
     function depositFor(uint256 _tokenId, uint256 _value) external;
 
+    function createLock(uint256 _value, uint256 _lockDuration) external returns (uint256);
+
+    function createLockFor(uint256 _value, uint256 _lockDuration, address _to) external returns (uint256);
+
     function increaseUnlockTime(uint256 _tokenId, uint256 _lockDuration) external;
 
     function setArtProxy(address _artProxy) external;

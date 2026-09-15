@@ -13,6 +13,7 @@ import {IFeeCenter} from "../interfaces/IFeeCenter.sol";
 import {IApexController} from "../interfaces/IApexController.sol";
 import {ApexErrors} from "./common/ApexErrors.sol";
 import {ApexControllerStorage} from "../storage/ApexControllerStorage.sol";
+import {ApexControllerExternalFarms} from "./ApexControllerExternalFarms.sol";
 
 library ApexControllerFeePolicy {
     using EnumerableSet for EnumerableSet.AddressSet;
@@ -46,6 +47,9 @@ library ApexControllerFeePolicy {
         bool gauged
     );
     event LauncherPoolFeeSplitSet(
+        address indexed pool, address indexed recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps
+    );
+    event CreatorFeesAssigned(
         address indexed pool, address indexed recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps
     );
     event ClassicFarmRegistered(address indexed pair);
@@ -230,6 +234,7 @@ library ApexControllerFeePolicy {
 
     function collectClassicProtocolFees(address pair) external returns (uint256 amount0, uint256 amount1) {
         ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
+        if (s.externalClassicFarmFactory[pair] != address(0)) return ApexControllerExternalFarms.collectFees(pair);
         require(s.classicFactory.isPair(pair), ApexErrors.NOT_PAIR(pair));
         return _collectClassicProtocolFees(s, pair);
     }
@@ -245,6 +250,49 @@ library ApexControllerFeePolicy {
         require(s.classicFactory.isPair(pair), ApexErrors.NOT_PAIR(pair));
         require(s.launcherPoolConfigs[pair].exists, ApexErrors.INVALID_POOL(pair));
         return _collectClassicProtocolFees(s, pair);
+    }
+
+    function assignCreatorFees(address pool, address recipient, uint16 creatorFeeBps) external {
+        require(pool != address(0), ApexErrors.ZERO_ADDRESS());
+        ApexControllerStorage.Layout storage s = ApexControllerStorage.layout();
+        ApexControllerStorage.LauncherPoolConfig storage poolConfig = s.launcherPoolConfigs[pool];
+        bool classic = s.classicFactory.isPair(pool);
+        uint256 baseFeeBps;
+        if (classic) {
+            // Fees accrued for an external receiver must remain with that receiver.
+            require(IClassicPool(pool).feeReceiver() == address(s.feeCenter), ApexErrors.INVALID_POOL(pool));
+            uint256 protocolFee = s.activeFarm[pool] ? s.classicFactory.protocolFee() : IClassicPool(pool).protocolFee();
+            require(protocolFee % CLASSIC_PROTOCOL_FEE_BPS_SCALE == 0, ApexErrors.INVALID_PROTOCOL_FEE());
+            baseFeeBps = protocolFee / CLASSIC_PROTOCOL_FEE_BPS_SCALE;
+            _collectClassicProtocolFees(s, pool);
+        } else {
+            ICLFactory factory = _canonicalCLFactory(s, pool);
+            (uint160 price,,,,, uint32 protocolFee,) = ICLPool(pool).slot0();
+            require(price != 0, ApexErrors.INVALID_POOL(pool));
+            if (s.activeFarm[pool]) {
+                baseFeeBps = _clGlobalProtocolFee(s);
+            } else {
+                require(uint16(protocolFee) == protocolFee >> 16, ApexErrors.INVALID_PROTOCOL_FEE());
+                baseFeeBps = uint16(protocolFee);
+            }
+            _collectCLProtocolFees(s, factory, pool, type(uint128).max, type(uint128).max);
+        }
+        if (poolConfig.exists) baseFeeBps = poolConfig.veGigaFeeBps;
+        require(baseFeeBps <= BPS, ApexErrors.INVALID_PROTOCOL_FEE());
+        _validateFeeSplit(recipient, creatorFeeBps, uint16(baseFeeBps));
+
+        if (!poolConfig.exists) {
+            // Reuse the fee-policy bookkeeping, but do not attribute the pool to a launcher
+            // or grant any permissions to its recipient or the assigning admin.
+            poolConfig.exists = true;
+            poolConfig.poolKind = uint8(classic ? IApexController.PoolKind.CLASSIC : IApexController.PoolKind.CL);
+            poolConfig.veGigaFeeBps = uint16(baseFeeBps);
+            s.launcherPools.add(pool);
+            if (s.activeFarm[pool]) s.activeLauncherPools.add(pool);
+        }
+        s.feeCenter.setCreatorFeeConfig(pool, recipient, creatorFeeBps, poolConfig.poolKind);
+        if (!s.activeFarm[pool]) _applyLauncherBaseFee(s, pool);
+        emit CreatorFeesAssigned(pool, recipient, creatorFeeBps, uint16(baseFeeBps));
     }
 
     function updateLauncherPoolFeeSplit(address pool, address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps)
@@ -292,6 +340,12 @@ library ApexControllerFeePolicy {
         classicChef.setPoolAllocPoint(pair, 0);
         s.totalAllocPoint -= s.farmAllocPoint[pair];
         s.farmAllocPoint[pair] = 0;
+
+        if (s.externalClassicFarmFactory[pair] != address(0)) {
+            s.activeFarm[pair] = false;
+            emit ClassicFarmDeactivated(pair);
+            return;
+        }
 
         ApexControllerStorage.LauncherPoolConfig storage poolConfig = s.launcherPoolConfigs[pair];
         IFeeCenter.CreatorFeeConfig memory config = s.feeCenter.creatorFeeConfig(pair);
@@ -531,6 +585,8 @@ library ApexControllerFeePolicy {
         require(address(classicChef) != address(0) && feeReceiver != address(0), ApexErrors.ZERO_ADDRESS());
 
         if (!s.registeredFarm[pair]) _registerClassicFarm(s, pair);
+        bool externalFarm = s.externalClassicFarmFactory[pair] != address(0);
+        if (externalFarm) ApexControllerExternalFarms.requireReady(pair);
         require(allocPoint != 0 || !s.activeFarm[pair], ApexErrors.ZERO_AMOUNT());
         classicChef.massUpdatePools();
         s.clMasterChef.massUpdatePools();
@@ -539,8 +595,10 @@ library ApexControllerFeePolicy {
         s.farmAllocPoint[pair] = allocPoint;
 
         if (s.launcherPoolConfigs[pair].exists) _collectClassicProtocolFees(s, pair);
-        factory.setPairProtocolFee(pair, CLASSIC_FARM_PROTOCOL_FEE);
-        factory.setPairFeeReceiver(pair, feeReceiver);
+        if (!externalFarm) {
+            factory.setPairProtocolFee(pair, CLASSIC_FARM_PROTOCOL_FEE);
+            factory.setPairFeeReceiver(pair, feeReceiver);
+        }
         s.activeFarm[pair] = true;
         if (s.launcherPoolConfigs[pair].exists) s.activeLauncherPools.add(pair);
         emit ClassicFarmActivated(pair, allocPoint, feeReceiver);

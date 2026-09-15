@@ -7,5 +7,8 @@ optimizer_runs = 100
 evm_version = "cancun"
 bytecode_hash = "none"
 remappings = [
-    "@openzeppelin/contracts-3/=lib/openzeppelin-contracts-3/contracts/"
+    "@openzeppelin/contracts-3/=lib/openzeppelin-contracts-3/contracts/",
+    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "forge-std/=lib/forge-std/src/"
 ]

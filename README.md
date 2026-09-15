@@ -2,13 +2,17 @@
 
 Core smart contracts for the multichain Apex decentralized-exchange stack.
 
-## Audit context
+## Repository relationship
 
-See [AUDIT_SCOPE.md](AUDIT_SCOPE.md) for the paid-review boundary and pinned
-upstream references. See [AUDIT_NOTES.md](AUDIT_NOTES.md) for architecture,
-intentional product deltas, accepted caveats, fixed historical findings, and
-integration assumptions.
-Developer responses are context only; auditors should validate them independently.
+This repository is a sanitized, one-way public mirror of Apex's authoritative
+private contracts repository. Published protocol source and eligible tests are
+exported from a reviewed private commit and are not developed as an independent
+fork. First-party scripts, internal documentation, audit notes, deployment
+configuration, broadcasts, operational/SDK integration tests, operator tooling,
+and private records are intentionally excluded.
+
+Private source commit: `b77ebdd81ae1e3002fa02bf49cc8970535c1c9c2`.
+
 
 ## Development
 

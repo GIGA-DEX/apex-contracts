@@ -39,6 +39,12 @@ interface IApexController {
     }
 
     function registerClassicFarm(address pair) external;
+    /// @dev External factories must implement the BrownFi V3 read and LP redemption ABI.
+    function setExternalClassicFactory(address factory, bool allowed) external;
+    function registerExternalClassicFarm(address factory, address pair) external;
+    function isExternalClassicFactory(address factory) external view returns (bool);
+    function externalClassicFarmFactory(address pair) external view returns (address);
+    function requireExternalClassicFarmReady(address pair) external view;
 
     function activateClassicFarm(address pair, uint256 allocPoint) external;
 
@@ -96,6 +102,15 @@ interface IApexController {
         LauncherPermission permission,
         bool active
     ) external;
+
+    /// @notice Assigns a share of gross swap fees to a recipient without granting launcher permissions.
+    /// @dev Admin only. Settles old fees first. Zero bps requires a zero recipient and removes the creator share.
+    ///      Preserves an existing base veGIGA share; first assignment on a gauged pool uses the global ungauged
+    ///      protocol share as its base. Ungauged CL pools must have symmetric protocol fees.
+    function assignCreatorFees(address pool, address recipient, uint16 creatorFeeBps) external;
+
+    /// @notice Anyone may register an unused CL swap fee with a permanent global tick spacing.
+    function enableCLFeeAmount(uint24 fee, int24 tickSpacing) external;
 
     /// @notice Settles existing fees, then updates a launcher's per-pool creator and base veGIGA split.
     function updateLauncherPoolFeeSplit(address pool, address recipient, uint16 creatorFeeBps, uint16 veGigaFeeBps)
