@@ -1480,6 +1480,8 @@ contract ApexControllerEmissionsTest is Test {
         controller.rebalanceEmissions(100 ether, 100, weights);
 
         vm.warp(block.timestamp + 50);
+        vm.expectEmit(true, false, false, true, address(controller));
+        emit ApexController.EmissionsStopped(controller.latestPeriodNumber(), block.timestamp);
         controller.stopAllEmissions();
         controller.deactivateClassicFarm(classicPair);
 
@@ -1493,6 +1495,38 @@ contract ApexControllerEmissionsTest is Test {
 
         assertApproxEqAbs(apex.balanceOf(alice), 50 ether, 1);
         assertLe(controller.rewardLiability(), 1);
+    }
+
+    function testStopEmitsWithoutPoolsAndOnRepeatedCalls() public {
+        for (uint256 i; i < 2; ++i) {
+            vm.expectEmit(true, false, false, true, address(controller));
+            emit ApexController.EmissionsStopped(0, block.timestamp);
+            controller.stopAllEmissions();
+            assertEq(controller.latestPeriodRewardPerSecond(), 0);
+            assertEq(controller.latestPeriodEndTime(), block.timestamp);
+            assertEq(controller.rewardLiability(), 0);
+        }
+    }
+
+    function testStopEventAfterNaturalExpiryAndUnauthorizedStop() public {
+        controller.activateClassicFarm(classicPair, 1000);
+        apex.mint(address(controller), 100 ether);
+        IApexController.EmissionWeight[] memory weights = new IApexController.EmissionWeight[](1);
+        weights[0] = IApexController.EmissionWeight({
+            kind: IApexController.PoolKind.CLASSIC, pool: classicPair, allocPoint: 1000
+        });
+        controller.rebalanceEmissions(100 ether, 100, weights);
+        vm.prank(alice);
+        vm.expectRevert();
+        controller.stopAllEmissions();
+        assertGt(controller.latestPeriodRewardPerSecond(), 0);
+        vm.warp(block.timestamp + 101);
+        vm.expectEmit(true, false, false, true, address(controller));
+        emit ApexController.EmissionsStopped(1, block.timestamp);
+        controller.stopAllEmissions();
+        assertEq(controller.latestPeriodRewardPerSecond(), 0);
+        assertEq(controller.farmAllocPoint(classicPair), 1000);
+        assertEq(controller.totalAllocPoint(), 1000);
     }
 
     function testDeactivateCLFarmRedistributesRemainingWindowToClassicFarm() public {

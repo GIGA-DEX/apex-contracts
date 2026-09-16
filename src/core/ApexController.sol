@@ -56,6 +56,7 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
     event CLFarmActivated(address indexed clFactory, address indexed pool, uint256 allocPoint);
     event CLFarmDeactivated(address indexed clFactory, address indexed pool);
     event RebalanceEmissions(uint256 amount, uint256 duration, uint256 rewardAmount, uint256 rewardPerSecond);
+    event EmissionsStopped(uint256 indexed periodNumber, uint256 stoppedAt);
     event RewardPaid(address indexed pool, address indexed to, uint256 amount);
     event RewardForfeited(address indexed pool, uint256 amount);
     event EmissionCenterSet(address indexed center);
@@ -410,6 +411,7 @@ contract ApexController is IApexController, AccessControlEnumerableUpgradeable, 
         }
         $.latestPeriodEndTime = block.timestamp;
         $.latestPeriodRewardPerSecond = 0;
+        emit EmissionsStopped($.latestPeriodNumber, block.timestamp);
     }
 
     function rebalanceEmissions(uint256 _amount, uint256 _duration, EmissionWeight[] calldata _weights)

@@ -11,7 +11,7 @@ fork. First-party scripts, internal documentation, audit notes, deployment
 configuration, broadcasts, operational/SDK integration tests, operator tooling,
 and private records are intentionally excluded.
 
-Private source commit: `b77ebdd81ae1e3002fa02bf49cc8970535c1c9c2`.
+Private source commit: `227de0d483bd4db2b2984152dbdb45b271494362`.
 
 
 ## Development
